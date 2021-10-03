@@ -241,6 +241,7 @@ userinit(void)
 
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
+  p->tickets = 1;
 
   p->state = RUNNABLE;
 
@@ -300,6 +301,9 @@ fork(void)
     if(p->ofile[i])
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
+
+  // Assign the child the same number of tickets as the father.
+  np->tickets = p->tickets;
 
   safestrcpy(np->name, p->name, sizeof(p->name));
 
