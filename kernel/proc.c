@@ -242,6 +242,7 @@ userinit(void)
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
   p->tickets = 1;
+  p->ticks = 0;
 
   p->state = RUNNABLE;
 

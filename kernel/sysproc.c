@@ -133,8 +133,7 @@ sys_getpinfo(void)
     procstat.inuse[i] = proc[i].state != UNUSED;
     procstat.tickets[i] = proc[i].tickets;
     procstat.pid[i] = proc[i].pid;
-    //TODO fill this
-    procstat.ticks[i] = 0;
+    procstat.ticks[i] = proc[i].ticks;
   }
   return copyout(myproc()->pagetable, useraddr,
                  (char*) &procstat, sizeof(procstat));
