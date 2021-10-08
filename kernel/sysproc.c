@@ -6,6 +6,7 @@
 #include "memlayout.h"
 #include "spinlock.h"
 #include "proc.h"
+#include "pstat.h"
 
 uint64
 sys_exit(void)
@@ -94,4 +95,44 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+// set the number of lottery assignment ticket
+// of the process.
+uint64
+sys_settickets(void)
+{
+  int n;
+
+  if(argint(0, &n) < 0)
+    return -1;
+  if(n < 1)
+    return -1;
+  // There is no need to protect this access with a lock,
+  // because this is the only way of modifying this value.
+  myproc()->tickets = n;
+  return 0;
+}
+
+uint64
+sys_getpinfo(void)
+{
+  extern struct proc proc[NPROC];
+  struct pstat procstat;
+  uint64 useraddr;
+  int i;
+
+  if (argaddr(0, &useraddr) < 0)
+    return -1;
+  if (!useraddr)
+    return -1;
+
+  for(i = 0; i < NPROC; i++) {
+    procstat.inuse[i] = proc[i].state != UNUSED;
+    procstat.tickets[i] = proc[i].tickets;
+    procstat.pid[i] = proc[i].pid;
+    procstat.ticks[i] = proc[i].ticks;
+  }
+  return copyout(myproc()->pagetable, useraddr,
+                 (char*) &procstat, sizeof(procstat));
 }
