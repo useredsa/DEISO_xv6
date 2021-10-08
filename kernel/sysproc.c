@@ -122,7 +122,7 @@ sys_getpinfo(void)
   uint64 useraddr;
   int i;
 
-  if (argaddr(0, (uint64*) &useraddr) < 0)
+  if (argaddr(0, &useraddr) < 0)
     return -1;
   //TODO check if procstat is in user space or smt like that as well
   // basically, check that the address is valid.

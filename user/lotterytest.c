@@ -3,64 +3,60 @@
 #include "user/user.h"
 #include "kernel/stat.h"
 
-void spin() {
-  unsigned x = 0;
-  unsigned y = 0;
-  int pid = getpid();
+void spin(int mul) {
+  volatile unsigned x = 0;
+  volatile unsigned y = 0;
 
   while (x < 100000) {
     y = 0;
-    while (y < pid*(1000)) {
+    while (y < mul*1000) {
       y++;
     }
     x++;
   }
 }
 
-void printpinfo(int pid) {
-  struct pstat pi = {0};
-  getpinfo(&pi);
+void printpinfo(int* pid, int npids) {
+  struct pstat pi;
   int i;
+  getpinfo(&pi);
+  printf("%s\t%s\t\t%s\n", "PID", "TICKETS", "TICKS");
   for (i = 0; i < NPROC; i++) {
-    if (pi.pid[i] == pid) {
-      printf("Number of tickets that PID %d has: %d\n", pid, pi.tickets[i]);
-      printf("Number of ticks that PID %d has: %d\n", pid, pi.ticks[i]);
-      printf("Is the process with PID %d in use? (0 or 1): %d\n", pid,
-             pi.inuse[i]);
+    for (int j = 0; j < npids; ++j) {
+      if (pi.pid[i] == pid[j]) {
+        printf("%d\t%d\t\t%d\n", pi.pid[i], pi.tickets[i], pi.ticks[i]);
+      }
     }
   }
 }
 
-int main(int argc, char *argv[]) {
-  int pid1, pid2, pid3;
+const int npids = 3;
 
-  if ((pid1 = fork()) == 0) {
-    int pp1 = getpid();
-    printf("Process started with PID %d\n\n", pp1);
-    settickets(10);
-    spin();
-    printpinfo(pp1);
-    printf("Process with PID %d finished!\n\n", pp1);
-    exit(0);
-  } else if ((pid2 = fork()) == 0) {
-    int pp2 = getpid();
-    printf("Process started with PID %d\n\n", pp2);
-    settickets(20);
-    spin();
-    printpinfo(pp2);
-    printf("Process with PID %d finished!\n\n", pp2);
-    exit(0);
-  } else if ((pid3 = fork()) == 0) {
-    int pp3 = getpid();
-    printf("Process started with PID %d\n\n", pp3);
-    settickets(30);
-    spin();
-    printpinfo(pp3);
-    printf("Process with PID %d finished!\n\n", pp3);
-    exit(0);
+int main(int argc, char *argv[]) {
+  int pid[npids];
+  int tickets[3] = {10, 20, 30};
+  int work[3] = {48, 24, 16};
+  settickets(100);
+
+  for (int i = 0; i < npids; ++i) {
+    if ((pid[i] = fork()) == 0) {
+      int pid = getpid();
+      printf("Process started with PID %d\n\n", pid);
+      settickets(tickets[i]);
+      spin(work[i]);
+      printf("Process with PID %d finished!\n\n", pid);
+      exit(0);
+    }
   }
-  wait(0);
-  wait(0);
-  wait(0);
+
+  int slices = 8;
+  do {
+    printpinfo(pid, npids);
+    sleep(8);
+  } while (slices--);
+
+  for (int i = 0; i < npids; ++i) {
+    wait(0);
+  }
   exit(0);
 }

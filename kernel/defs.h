@@ -8,6 +8,8 @@ struct spinlock;
 struct sleeplock;
 struct stat;
 struct superblock;
+struct cpu;
+struct rng;
 
 // bio.c
 void            binit(void);
@@ -82,6 +84,7 @@ void            panic(char*) __attribute__((noreturn));
 void            printfinit(void);
 
 // proc.c
+void            initcpu(struct cpu*);
 int             cpuid(void);
 void            exit(int);
 int             fork(void);
@@ -181,6 +184,10 @@ void            plic_complete(int);
 void            virtio_disk_init(void);
 void            virtio_disk_rw(struct buf *, int);
 void            virtio_disk_intr(void);
+
+// random.c
+void srand(struct rng* rng, uint seed);
+uint rand(struct rng* rng);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))

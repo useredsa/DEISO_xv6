@@ -160,7 +160,7 @@ kerneltrap()
 }
 
 void
-clockintr()
+intr()
 {
   acquire(&tickslock);
   ticks++;
@@ -205,7 +205,7 @@ devintr()
     // forwarded by timervec in kernelvec.S.
 
     if(cpuid() == 0){
-      clockintr();
+      intr();
     }
     
     // acknowledge the software interrupt by clearing

@@ -1,3 +1,5 @@
+#include "random.h"
+
 // Saved registers for kernel context switches.
 struct context {
   uint64 ra;
@@ -22,6 +24,7 @@ struct context {
 struct cpu {
   struct proc *proc;          // The process running on this cpu, or null.
   struct context context;     // swtch() here to enter scheduler().
+  struct rng rng;             // Random number generator.
   int noff;                   // Depth of push_off() nesting.
   int intena;                 // Were interrupts enabled before push_off()?
 };
@@ -93,7 +96,7 @@ struct proc {
   int xstate;                  // Exit status to be returned to parent's wait
   int pid;                     // Process ID
   int tickets;                 // Number of lottery planification tickets.
-  int ticks;                   // Number of clock ticks that the process has been running
+  uint ticks;                  // Number of clock ticks that the process has been running
 
   // wait_lock must be held when using this:
   struct proc *parent;         // Parent process
