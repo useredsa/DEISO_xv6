@@ -56,6 +56,13 @@ procinit(void)
   }
 }
 
+// initialize the cpu variables at boot time
+void
+cpuinit(struct cpu* cpu)
+{
+  srand(&cpu->rng, 12345);
+}
+
 // Must be called with interrupts disabled,
 // to prevent race with process being moved
 // to a different CPU.
