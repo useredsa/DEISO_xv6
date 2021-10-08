@@ -126,6 +126,7 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
+  p->ticks = 0;
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -450,28 +451,60 @@ scheduler(void)
 {
   struct proc *p;
   struct cpu *c = mycpu();
+  int tickets_partial_sums[NPROC+1];
+  int winner_ticket;
+  int lo, hi, med;
   
   c->proc = 0;
   for(;;){
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
 
-    for(p = proc; p < &proc[NPROC]; p++) {
-      acquire(&p->lock);
-      if(p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
-
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
+    tickets_partial_sums[0] = 0;
+    for(int i = 0; i < NPROC; i++) {
+      tickets_partial_sums[i+1] = tickets_partial_sums[i];
+      acquire(&proc[i].lock);
+      if(proc[i].state == RUNNABLE) {
+        tickets_partial_sums[i+1] += proc[i].tickets;
       }
-      release(&p->lock);
+      release(&proc[i].lock);
     }
+
+    // If total number of playing tickets is 0
+    // there is no process to schedule right now.
+    if (tickets_partial_sums[NPROC] == 0) continue;
+
+    winner_ticket = rand(&c->rng) % tickets_partial_sums[NPROC];
+
+    // Binary search the winner proc
+    lo = 0;
+    hi = NPROC;
+    while(hi-lo > 1){
+      med = (lo + hi)/2;
+      if (winner_ticket < tickets_partial_sums[med]) {
+        hi = med;
+      } else {
+        lo = med;
+      }
+    }
+    p = proc + lo;
+
+    // Assign the CPU
+    acquire(&p->lock);
+    if(p->state == RUNNABLE) {
+      // Switch to chosen process.  It is the process's job
+      // to release its lock and then reacquire it
+      // before jumping back to us.
+      p->state = RUNNING;
+      p->ticks += 1;
+      c->proc = p;
+      swtch(&c->context, &p->context);
+
+      // Process is done running for now.
+      // It should have changed its p->state before coming back.
+      c->proc = 0;
+    }
+    release(&p->lock);
   }
 }
 

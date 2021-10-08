@@ -135,6 +135,7 @@ UPROGS=\
 	$U/_zombie\
 	$U/_testtickets\
 	$U/_ps\
+	$U/_lotterytest\
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)
