@@ -37,6 +37,7 @@ void
 usertrap(void)
 {
   int which_dev = 0;
+  uint64 fault_addr;
 
   if((r_sstatus() & SSTATUS_SPP) != 0)
     panic("usertrap: not from user mode");
@@ -69,11 +70,10 @@ usertrap(void)
     break;
   case 13: // read page fault
   case 15: // store page fault
-    printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
-    uint64 fault_addr = r_stval();
-    if(fault_addr >= p->sz || uvmpagefault(p->pagetable, fault_addr)!=0){
+    fault_addr = r_stval();
+    if(fault_addr >= p->sz || uvmpagefault(p->pagetable, fault_addr)==0){
       p->killed = 1;
-      printf("usertrap(): segmentation fault pid=%d\n", p->pid);
+      printf("segmentation fault pid=%d\n", p->pid);
     }
     break;
   default:
@@ -151,20 +151,39 @@ kerneltrap()
   uint64 sepc = r_sepc();
   uint64 sstatus = r_sstatus();
   uint64 scause = r_scause();
+  struct proc* p = myproc();
+  uint64 fault_addr;
   
   if((sstatus & SSTATUS_SPP) == 0)
     panic("kerneltrap: not from supervisor mode");
   if(intr_get() != 0)
     panic("kerneltrap: interrupts enabled");
-
-  if((which_dev = devintr()) == 0){
-    printf("scause %p\n", scause);
-    printf("sepc=%p stval=%p\n", r_sepc(), r_stval());
-    panic("kerneltrap");
+  switch (scause)
+  {
+  case 13: // read page fault
+  case 15: // store page fault
+    fault_addr = r_stval();
+    if (p == 0) {
+      panic("kernel page fault\n");
+    }
+    if(fault_addr >= p->sz || uvmpagefault(p->pagetable, fault_addr)==0){
+      p->killed = 1;
+      printf("segmentation fault pid=%d\n", p->pid);
+    }
+    break;
+  default:
+    if((which_dev = devintr()) == 0){
+      printf("scause %p\n", scause);
+      printf("sepc=%p stval=%p\n", r_sepc(), r_stval());
+      panic("kerneltrap");
+    }
   }
 
+  if(p != 0 && p->killed)
+    exit(-1);
+
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2 && myproc() != 0 && myproc()->state == RUNNING)
+  if(which_dev == 2 && p != 0 && p->state == RUNNING)
     yield();
 
   // the yield() may have caused some traps to occur,
