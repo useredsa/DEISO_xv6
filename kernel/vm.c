@@ -5,6 +5,7 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "kalloc.h"
 
 /*
  * the kernel's page table.
@@ -14,6 +15,15 @@ pagetable_t kernel_pagetable;
 extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
+
+struct vma {
+  uint64 init_dir;
+  uint64 last_dir;
+  uint length;
+  int flags;
+};
+
+struct vma vmas[MAX_VMAS];
 
 // Make a direct-map page table for the kernel.
 pagetable_t
@@ -178,7 +188,7 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
       panic("uvmunmap: not a leaf");
     if((*pte & PTE_V) && do_free){
       uint64 pa = PTE2PA(*pte);
-      kfree((void*)pa);
+      kdecref((void*)pa);
     }
     *pte = 0;
   }
@@ -233,7 +243,7 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
     }
     memset(mem, 0, PGSIZE);
     if(mappages(pagetable, a, PGSIZE, (uint64)mem, PTE_W|PTE_X|PTE_R|PTE_U) != 0){
-      kfree(mem);
+      kdecref(mem);
       uvmdealloc(pagetable, a, oldsz);
       return 0;
     }
@@ -253,7 +263,7 @@ uvmpagefault(pagetable_t pagetable, uint64 va){
   }
   memset(mem, 0, PGSIZE);
   if(mappages(pagetable, va, PGSIZE, (uint64)mem, PTE_W|PTE_R|PTE_U) != 0){
-    kfree(mem);
+    kdecref(mem);
     return -1;
   }
   return 0;
@@ -294,7 +304,7 @@ freewalk(pagetable_t pagetable)
       panic("freewalk: leaf");
     }
   }
-  kfree((void*)pagetable);
+  kdecref((void*)pagetable);
 }
 
 // Free user memory pages,
@@ -332,7 +342,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       goto err;
     memmove(mem, (char*)pa, PGSIZE);
     if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+      kdecref(mem);
       goto err;
     }
   }

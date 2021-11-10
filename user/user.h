@@ -27,7 +27,7 @@ int sleep(int);
 int uptime(void);
 int settickets(int);
 int getpinfo(struct pstat*);
-void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset);
+void *mmap(void *addr, size_t length, int prot, int flags, int fd, int offset);
 int munmap(void *addr, size_t length);
 
 // ulib.c

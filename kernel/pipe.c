@@ -7,6 +7,7 @@
 #include "fs.h"
 #include "sleeplock.h"
 #include "file.h"
+#include "kalloc.h"
 
 #define PIPESIZE 512
 
@@ -47,7 +48,7 @@ pipealloc(struct file **f0, struct file **f1)
 
  bad:
   if(pi)
-    kfree((char*)pi);
+    kdecref((char*)pi);
   if(*f0)
     fileclose(*f0);
   if(*f1)
@@ -68,7 +69,7 @@ pipeclose(struct pipe *pi, int writable)
   }
   if(pi->readopen == 0 && pi->writeopen == 0){
     release(&pi->lock);
-    kfree((char*)pi);
+    kdecref((char*)pi);
   } else
     release(&pi->lock);
 }

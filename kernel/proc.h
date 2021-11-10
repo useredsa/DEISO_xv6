@@ -97,6 +97,7 @@ struct proc {
   int pid;                     // Process ID
   int tickets;                 // Number of lottery planification tickets.
   uint ticks;                  // Number of times the process has been scheduled
+  int vma[VMA_SIZE];           // Virtual Memory Area      
 
   // wait_lock must be held when using this:
   struct proc *parent;         // Parent process
