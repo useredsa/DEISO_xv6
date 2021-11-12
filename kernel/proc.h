@@ -97,7 +97,6 @@ struct proc {
   int pid;                     // Process ID
   int tickets;                 // Number of lottery planification tickets.
   uint ticks;                  // Number of times the process has been scheduled
-  int vma[VMA_SIZE];           // Virtual Memory Area      
 
   // wait_lock must be held when using this:
   struct proc *parent;         // Parent process
@@ -105,6 +104,7 @@ struct proc {
   // these are private to the process, so p->lock need not be held.
   uint64 kstack;               // Virtual address of kernel stack
   uint64 sz;                   // Size of process memory (bytes)
+  struct vma* vma[VMA_SIZE];   // Virtual Memory Area      
   pagetable_t pagetable;       // User page table
   struct trapframe *trapframe; // data page for trampoline.S
   struct context context;      // swtch() here to run process

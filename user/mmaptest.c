@@ -3,7 +3,6 @@
 #include "kernel/types.h"
 #include "kernel/stat.h"
 #include "kernel/riscv.h"
-#include "kernel/mmap.h"
 #include "kernel/fs.h"
 #include "user/user.h"
 
@@ -41,6 +40,7 @@ _v1(char *p)
   for (i = 0; i < PGSIZE*2; i++) {
     if (i < PGSIZE + (PGSIZE/2)) {
       if (p[i] != 'A') {
+        printf("addr: %p\n", &p[i]);
         printf("mismatch at %d, wanted 'A', got 0x%x\n", i, p[i]);
         err("v1 mismatch (1)");
       }
@@ -254,10 +254,8 @@ fork_test(void)
     munmap(p1, PGSIZE); // just the first page
     exit(0); // tell the parent that the mapping looks OK.
   }
-
   int status = -1;
   wait(&status);
-
   if(status != 0){
     printf("fork_test failed\n");
     exit(1);

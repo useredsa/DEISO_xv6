@@ -6,6 +6,7 @@
 #include "proc.h"
 #include "defs.h"
 #include "kalloc.h"
+#include "mmap.h"
 
 struct cpu cpus[NCPU];
 
@@ -300,6 +301,25 @@ fork(void)
   }
   np->sz = p->sz;
 
+
+  //Assign the child the same vmas as the father
+  for(int i=0; i< VMA_SIZE; i++){
+    if (p->vma[i]){
+      np->vma[i] = vmadup(p->vma[i]);
+      if(np->vma[i] == 0 || uvmcopyrange(p->pagetable, np->pagetable, p->vma[i]->startaddr, p->vma[i]->endaddr)<0){
+        for(int j=0; j < i; j++){
+          if(np->vma[j]){
+            munmap(np->vma[j]->startaddr, np->vma[j]->endaddr - np->vma[j]->startaddr);
+          }
+        }
+        freeproc(np);
+        release(&np->lock);
+        return -1;
+      }
+    }
+  }
+
+
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
 
@@ -364,6 +384,13 @@ exit(int status)
       struct file *f = p->ofile[fd];
       fileclose(f);
       p->ofile[fd] = 0;
+    }
+  }
+
+  // Unmap all vmas
+  for(int i = 0; i < VMA_SIZE; ++i){
+    if(p->vma[i]){
+      munmap(p->vma[i]->startaddr, p->vma[i]->endaddr - p->vma[i]->startaddr);
     }
   }
 
