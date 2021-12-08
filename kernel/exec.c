@@ -9,7 +9,6 @@
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 
-// // TODO
 static int loadseg(struct uvm *uvm, uint64 addr, struct inode *ip, uint offset,
                    uint sz);
 
@@ -23,8 +22,6 @@ int exec(char *path, char **argv) {
   struct uvm uvm;
   struct proc *p = myproc();
   memset(&uvm, 0, sizeof(struct uvm));
-  //TODO cmmts
-  // printf("exec pid=%d %s\n", p->pid, path);
 
   begin_op();
 
@@ -55,7 +52,13 @@ int exec(char *path, char **argv) {
                 perm & PTE_W ? MAP_PRIVATE : MAP_SHARED, ip, ph.off,
                 ph.filesz) == MAP_FAILED)
       goto bad;
-    if (loadseg(&uvm, ph.vaddr, ip, ph.off, ph.filesz) < 0) goto bad;
+    // We need to unlock because complete_map locks
+    iunlock(ip);
+    if (loadseg(&uvm, ph.vaddr, ip, ph.off, ph.filesz) < 0) {
+      ilock(ip);
+      goto bad;
+    }
+    ilock(ip);
     highest_addr = MAX(highest_addr, ph.vaddr + ph.memsz);
   }
   iunlockput(ip);
@@ -132,23 +135,8 @@ bad:
 // Returns 0 on success, -1 on failure.
 static int loadseg(struct uvm *uvm, uint64 va, struct inode *ip, uint offset,
                    uint sz) {
-  uint i, n;
-  uint64 pa;
-
-  for (i = 0; i < sz; i += PGSIZE) {
-    pa = pgt_getpa(uvm->pagetable, va + i);
-    // printf("loadseg: request completemap %d %d\n", offset, sz);
-    if (pa == 0) {
-      pa = uvm_completemap(uvm, va + i, PTE_R);
-      if (pa == 0) panic("loadseg: address should exist");
-    }
-    if (sz - i < PGSIZE)
-      n = sz - i;
-    else
-      n = PGSIZE;
-    printf("LOADSEG %p %p %p\n", pa, offset+i, n);
-    // if (readi(ip, 0, (uint64)pa, offset + i, n) != n) return -1;
+  for (uint i = 0; i < sz; i += PGSIZE) {
+    uvm_completemap(uvm, va + i, PTE_R);
   }
-
   return 0;
 }

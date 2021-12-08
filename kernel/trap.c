@@ -66,7 +66,7 @@ void usertrap(void) {
       if (uvm_completemap(&p->uvm, PGROUNDDOWN(fault_addr), missing_perm) ==
           0) {
         p->killed = 1;
-        printf("user segmentation fault pid=%d addr=%p missing_perm=%d\n",
+        printf("\nsegmentation fault pid=%d addr=%p missing_perm=%d\n",
                p->pid, fault_addr, missing_perm);
       }
     } break;

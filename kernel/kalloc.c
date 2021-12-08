@@ -54,7 +54,6 @@ uint64 kalloc(void) {
   acquire(&kmem.lock);
   if (kmem.numfree == 0) {
     release(&kmem.lock);
-    printf("kalloc: out of memory\n");
     return 0;
   }
   kmem.numfree--;

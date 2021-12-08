@@ -158,12 +158,8 @@ void userinit(void) {
   p = allocproc();
   initproc = p;
 
-  // allocate one user page and copy init's instructions
-  // and data into it.
-  // TODO why uvminit in another function?
+  // Create uvm for the initial process.
   code2uvm(&p->uvm, initcode, sizeof(initcode));
-  // TODO
-  // p->sz = PGSIZE;
 
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
@@ -189,8 +185,6 @@ int fork(void) {
   if ((np = allocproc()) == 0) {
     return -1;
   }
-  //TODO cmmts
-  // printf("fork %d into %d\n", p->pid, np->pid);
 
   // Assign the child the same vmas as the father
   if (uvm_dup(&p->uvm, &np->uvm)) {

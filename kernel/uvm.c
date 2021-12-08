@@ -83,7 +83,6 @@ int vma_intersect(struct vma* v, struct vma* w) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 int uvm_new(struct uvm* uvm, uint64 trapframe) {
-  // printf("-> uvm_new %p\n", uvm);
   memset(uvm, 0, sizeof(struct uvm));
   if ((uvm->pagetable = pgt_new()) == 0) return -1;
 
@@ -111,8 +110,6 @@ int uvm_new(struct uvm* uvm, uint64 trapframe) {
 }
 
 void uvm_free(struct uvm* uvm) {
-  // printf("->uvm_free: %p\n", uvm);
-  // printf("-> uvm_free %p\n", uvm);
   for (int i = 0; i < VMA_SIZE; ++i) {
     if (uvm->vma[i]) {
       uvm_unmap(uvm, uvm->vma[i]->start, uvm->vma[i]->length);
@@ -177,7 +174,6 @@ uint64 getfreevrange(struct uvm* uvm, int length) {
 
 uint64 uvm_map(struct uvm* uvm, uint64 addr, uint64 length, uint perm,
                uint flags, struct inode* inode, uint offset, uint filesz) {
-  // printf("-> uvm_map %p, addr=%p length=%p, inode=%p\n", uvm, addr, length,
   // inode);
   if (inode == 0 && flags != MAP_PRIVATE) return MAP_FAILED;
   // if (inode != 0 && addr % PGSIZE != offset % PGSIZE) return MAP_FAILED;
@@ -210,8 +206,6 @@ uint64 uvm_map(struct uvm* uvm, uint64 addr, uint64 length, uint perm,
 }
 
 void uvm_unmap(struct uvm* uvm, uint64 addr, uint64 length) {
-  // printf("->uvm_map: %p %p %p\n", uvm, addr, length);
-  // printf("-> uvm_unmap %p, addr=%p length=%p\n", uvm, addr, length);
   struct vma* vma = uvm_va2vma(uvm, addr);
   if (vma == 0) panic("uvm_unmap: not in vma!\n");
   if (addr != vma->start && addr + length != vma->start + vma->length)
@@ -255,46 +249,28 @@ pte_t* pgt_walk(pagetable_t pagetable, uint64 va, int alloc);
 
 uint64 uvm_completemap(struct uvm* uvm, uint64 va, uint64 missing_perm) {
   if (va % PGSIZE != 0 || va >= MAXVA) return 0;
-  // printf("-> complete map part 0 %p %d\n", va, missing_perm);
-  // TODO
-  //  if ((missing_perm & PTE_R) && (missing_perm & PTE_W))
-  //    panic("uvm_completemap: 2 missing perms\n");
   struct vma* vma = uvm_va2vma(uvm, va);
   if (!vma || (vma->perm & missing_perm) == 0) return 0;
 
   pte_t* pte = pgt_walk(uvm->pagetable, va, 1);
-  // TODO cmments
   if (pte == 0) return 0;
-  // printf("complete map part 2 %d %d\n", PTE_FLAGS(*pte) & 31,
-  //        PTE_FLAGS(*pte) & missing_perm);
 
   if ((*pte & PTE_V) == 0) {
     // If pte did not exist, handle depending on whether its file.
     uint64 pa;
     if ((pa = kalloc()) == 0) return 0;
     *pte = PA2PTE(pa) | vma->perm | PTE_V | PTE_U;
-    // TODO
     memset((char*)pa, 0, PGSIZE);
-    //  if (vma->inode != 0)
-    //  printf("Reading from file %p %p %p %p %p\n", va, pa, vma->start,
-    //  vma->offset,
-    //         vma->filesz);
-    // return pa;
     if (vma->inode != 0) {
-      // printf("Reading from file %p %p %p %p\n", va, pa, vma->start,
-      // vma->offset, vma->filesz);
       // File -> read
       uint64 eof = vma->start + vma->filesz;
       if (va < eof) {
         uint64 readsz = MIN(eof - va, PGSIZE);
-        // printf("read %p from file\n", readsz);
-        // ilock(vma->inode);
-        // printf("COMPMAP %p %p %p\n", pa, vma->offset + (va - vma->start),
-        //        readsz);
+        ilock(vma->inode);
         int r =
             readi(vma->inode, 0, pa, vma->offset + (va - vma->start), readsz);
-        // iunlock(vma->inode);
-        // TODO handle r != read length
+        iunlock(vma->inode);
+        // TODO handle r != read length?
         if (r != readsz) panic("uvm_completemap: readi");
       }
     }
@@ -311,11 +287,9 @@ uint64 uvm_completemap(struct uvm* uvm, uint64 va, uint64 missing_perm) {
     // or copy the page to a new page.
     uint64 pa = PTE2PA(*pte);
     if (ksingleref(pa)) {
-      // printf("no copy on write %p\n", pa);
       *pte |= PTE_W;
       return pa;
     }
-    // printf("copy on write %p\n", pa);
     uint64 mem;
     if ((mem = kalloc()) == 0) {
       return 0;
@@ -327,15 +301,13 @@ uint64 uvm_completemap(struct uvm* uvm, uint64 va, uint64 missing_perm) {
   }
   printf("complete map part 2 %d %d\n", PTE_FLAGS(*pte) & 31,
          PTE_FLAGS(*pte) & missing_perm);
-  // If pte did exist and it was a read failure,
-  // panic for the moment.
+  // If pte did exist and it was other types of failures
+  // that should not happen -> panic.
   printf("vaddr=%p paddr=%p\n", va, PTE2PA(*pte));
-  panic("read page fault\n");
   return PTE2PA(*pte);
 }
 
 int uvm_growheap(struct uvm* uvm, int n) {
-  // printf("-> uvm_growheap %p, n=%d\n", uvm, n);
   struct vma* heap = uvm->heap;
   if (n > 0) {
     uint64 end = heap->start + heap->length;
@@ -349,16 +321,15 @@ int uvm_growheap(struct uvm* uvm, int n) {
       }
     }
   } else if (n < 0) {
-    // TODO not make heap minimum size PGSIZE: see exec
-    if (heap->length < -n) return -1;
-    printf("reducing %p\n", n);
+    // Heap takes an extra non used page: see exec.
+    // The reason is to avoid having empty vma.
+    if (heap->length - PGSIZE < -n) return -1;
     uvm_unmap(uvm, heap->start + heap->length + n, -n);
   }
   return 0;
 }
 
 int uvm_dup(struct uvm* p, struct uvm* c) {
-  // printf("-> uvm_dup %p %p\n", p, c);
   for (int i = 0; i < VMA_SIZE; i++) {
     if (p->vma[i]) {
       c->vma[i] = vmadup(p->vma[i]);
@@ -398,7 +369,6 @@ void code2uvm(struct uvm* uvm, uchar* src, uint sz) {
 }
 
 int copyout(struct uvm* uvm, uint64 dstva, char* src, uint64 len) {
-  // printf("->copyout: %p %p %p\n", uvm, dstva, len);
   uint64 n, va0, pa0;
 
   while (len > 0) {
@@ -419,14 +389,12 @@ int copyout(struct uvm* uvm, uint64 dstva, char* src, uint64 len) {
 }
 
 int copyin(struct uvm* uvm, char* dst, uint64 srcva, uint64 len) {
-  // printf("->copyin: %p %p %p\n", uvm, srcva, len);
   uint64 n, va0, pa0;
 
   while (len > 0) {
     va0 = PGROUNDDOWN(srcva);
     pa0 = pgt_getpa(uvm->pagetable, va0);
     if (pa0 == 0) {
-      printf("this may fail %p\n", va0);
       if ((pa0 = uvm_completemap(uvm, va0, PTE_R)) == 0) return -1;
     }
     n = PGSIZE - (srcva - va0);
@@ -441,7 +409,6 @@ int copyin(struct uvm* uvm, char* dst, uint64 srcva, uint64 len) {
 }
 
 int copyinstr(struct uvm* uvm, char* dst, uint64 srcva, uint64 max) {
-  // printf("->copyinstr: %p %p %p\n", uvm, srcva, max);
   uint64 n, va0, pa0;
   int got_null = 0;
 

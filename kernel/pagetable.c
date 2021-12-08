@@ -145,16 +145,10 @@ int pgt_clone(pagetable_t src, pagetable_t dst, uint64 vastart, uint64 vaend) {
     pte_t* dstpte = pgt_walk(dst, addr, 1);
     if (dstpte == 0) goto err;
 
-    // // Remove write bit
-    // *srcpte &= ~((pte_t)PTE_W);
-    // *dstpte = *srcpte;
-    // kincref(pa);
-
-    //TODO remove
-    uint64 mem = kalloc();
-    if (mem == 0) goto err;
-    memmove((void*)mem, (void*)pa, PGSIZE);
-    *dstpte = PA2PTE(mem) | PTE_FLAGS(*srcpte);
+    // Remove write bit
+    *srcpte &= ~((pte_t)PTE_W);
+    *dstpte = *srcpte;
+    kincref(pa);
   }
   return 0;
 
