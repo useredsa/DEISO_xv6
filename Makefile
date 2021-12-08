@@ -11,7 +11,8 @@ OBJS = \
   $K/spinlock.o \
   $K/string.o \
   $K/main.o \
-  $K/vm.o \
+  $K/pagetable.o \
+  $K/uvm.o \
   $K/proc.o \
   $K/swtch.o \
   $K/trampoline.o \
@@ -29,8 +30,7 @@ OBJS = \
   $K/kernelvec.o \
   $K/plic.o \
   $K/virtio_disk.o \
-  $K/random.o \
-  $K/mmap.o
+  $K/random.o
 
 # riscv64-unknown-elf- or riscv64-linux-gnu-
 # perhaps in /opt/riscv/bin

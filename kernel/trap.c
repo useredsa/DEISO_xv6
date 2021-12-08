@@ -1,10 +1,10 @@
-#include "types.h"
-#include "param.h"
+#include "defs.h"
 #include "memlayout.h"
+#include "param.h"
+#include "proc.h"
 #include "riscv.h"
 #include "spinlock.h"
-#include "proc.h"
-#include "defs.h"
+#include "types.h"
 
 struct spinlock tickslock;
 uint ticks;
@@ -16,83 +16,75 @@ void kernelvec();
 
 extern int devintr();
 
-void
-trapinit(void)
-{
-  initlock(&tickslock, "time");
-}
+void trapinit(void) { initlock(&tickslock, "time"); }
 
 // set up to take exceptions and traps while in the kernel.
-void
-trapinithart(void)
-{
-  w_stvec((uint64)kernelvec);
-}
+void trapinithart(void) { w_stvec((uint64)kernelvec); }
 
 //
 // handle an interrupt, exception, or system call from user space.
 // called from trampoline.S
 //
-void
-usertrap(void)
-{
+void usertrap(void) {
   int which_dev = 0;
-  uint64 fault_addr;
 
-  if((r_sstatus() & SSTATUS_SPP) != 0)
-    panic("usertrap: not from user mode");
+  if ((r_sstatus() & SSTATUS_SPP) != 0) panic("usertrap: not from user mode");
 
   // send interrupts and exceptions to kerneltrap(),
   // since we're now in the kernel.
   w_stvec((uint64)kernelvec);
 
   struct proc *p = myproc();
-  
+
   // save user program counter.
   p->trapframe->epc = r_sepc();
 
   uint64 cause = r_scause();
-  switch (cause)
-  {
-  case 8: // system call
-    if(p->killed)
-      exit(-1);
+  switch (cause) {
+    case 8:  // system call
+      if (p->killed) exit(-1);
 
-    // sepc points to the ecall instruction,
-    // but we want to return to the next instruction.
-    p->trapframe->epc += 4;
+      // sepc points to the ecall instruction,
+      // but we want to return to the next instruction.
+      p->trapframe->epc += 4;
 
-    // an interrupt will change sstatus &c registers,
-    // so don't enable until done with those registers.
-    intr_on();
+      // an interrupt will change sstatus &c registers,
+      // so don't enable until done with those registers.
+      intr_on();
 
-    syscall();
-    break;
-  case 13: // read page fault
-  case 15: // store page fault
-    fault_addr = r_stval();
-    if(fault_addr >= p->sz || uvmpagefault(p->pagetable, fault_addr)==0){
-      p->killed = 1;
-      printf("segmentation fault pid=%d\n", p->pid);
-    }
-    break;
-  default:
-    if((which_dev = devintr()) != 0){
-    // ok
-    } else{
-      printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
-      printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
-      p->killed = 1;
-    }
-    break;
+      syscall();
+      break;
+    case 12:  // execute page fault
+    case 13:  // read page fault
+    case 15:  // store page fault
+    {
+      uint64 fault_addr = r_stval();
+      uint64 missing_perm = 0;
+      if (cause == 13) missing_perm = PTE_R;
+      if (cause == 15) missing_perm = PTE_W;
+      if (cause == 12) missing_perm = PTE_X;
+      if (uvm_completemap(&p->uvm, PGROUNDDOWN(fault_addr), missing_perm) ==
+          0) {
+        p->killed = 1;
+        printf("user segmentation fault pid=%d addr=%p missing_perm=%d\n",
+               p->pid, fault_addr, missing_perm);
+      }
+    } break;
+    default:
+      if ((which_dev = devintr()) != 0) {
+        // ok
+      } else {
+        printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+        printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+        p->killed = 1;
+      }
+      break;
   }
-  
-  if(p->killed)
-    exit(-1);
+
+  if (p->killed) exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
-    yield();
+  if (which_dev == 2) yield();
 
   usertrapret();
 }
@@ -100,9 +92,7 @@ usertrap(void)
 //
 // return to user space
 //
-void
-usertrapret(void)
-{
+void usertrapret(void) {
   struct proc *p = myproc();
 
   // we're about to switch the destination of traps from
@@ -115,76 +105,79 @@ usertrapret(void)
 
   // set up trapframe values that uservec will need when
   // the process next re-enters the kernel.
-  p->trapframe->kernel_satp = r_satp();         // kernel page table
-  p->trapframe->kernel_sp = p->kstack + PGSIZE; // process's kernel stack
+  p->trapframe->kernel_satp = r_satp();          // kernel page table
+  p->trapframe->kernel_sp = p->kstack + PGSIZE;  // process's kernel stack
   p->trapframe->kernel_trap = (uint64)usertrap;
-  p->trapframe->kernel_hartid = r_tp();         // hartid for cpuid()
+  p->trapframe->kernel_hartid = r_tp();  // hartid for cpuid()
 
   // set up the registers that trampoline.S's sret will use
   // to get to user space.
-  
+
   // set S Previous Privilege mode to User.
   unsigned long x = r_sstatus();
-  x &= ~SSTATUS_SPP; // clear SPP to 0 for user mode
-  x |= SSTATUS_SPIE; // enable interrupts in user mode
+  x &= ~SSTATUS_SPP;  // clear SPP to 0 for user mode
+  x |= SSTATUS_SPIE;  // enable interrupts in user mode
   w_sstatus(x);
 
   // set S Exception Program Counter to the saved user pc.
   w_sepc(p->trapframe->epc);
 
   // tell trampoline.S the user page table to switch to.
-  uint64 satp = MAKE_SATP(p->pagetable);
+  uint64 satp = MAKE_SATP(p->uvm.pagetable);
 
-  // jump to trampoline.S at the top of memory, which 
+  // jump to trampoline.S at the top of memory, which
   // switches to the user page table, restores user registers,
   // and switches to user mode with sret.
   uint64 fn = TRAMPOLINE + (userret - trampoline);
-  ((void (*)(uint64,uint64))fn)(TRAPFRAME, satp);
+  ((void (*)(uint64, uint64))fn)(TRAPFRAME, satp);
 }
 
 // interrupts and exceptions from kernel code go here via kernelvec,
 // on whatever the current kernel stack is.
-void 
-kerneltrap()
-{
+void kerneltrap() {
   int which_dev = 0;
   uint64 sepc = r_sepc();
   uint64 sstatus = r_sstatus();
-  uint64 scause = r_scause();
-  struct proc* p = myproc();
-  uint64 fault_addr;
-  
-  if((sstatus & SSTATUS_SPP) == 0)
+  uint64 cause = r_scause();
+  struct proc *p = myproc();
+
+  if ((sstatus & SSTATUS_SPP) == 0)
     panic("kerneltrap: not from supervisor mode");
-  if(intr_get() != 0)
-    panic("kerneltrap: interrupts enabled");
-  switch (scause)
-  {
-  case 13: // read page fault
-  case 15: // store page fault
-    fault_addr = r_stval();
-    if (p == 0) {
-      panic("kernel page fault\n");
-    }
-    if(fault_addr >= p->sz || uvmpagefault(p->pagetable, fault_addr)==0){
-      p->killed = 1;
-      printf("segmentation fault pid=%d\n", p->pid);
-    }
-    break;
-  default:
-    if((which_dev = devintr()) == 0){
-      printf("scause %p\n", scause);
-      printf("sepc=%p stval=%p\n", r_sepc(), r_stval());
-      panic("kerneltrap");
-    }
+  if (intr_get() != 0) panic("kerneltrap: interrupts enabled");
+  switch (cause) {
+    // case 12:  // execute page fault
+    // case 13:  // read page fault
+    // case 15:  // store page fault
+    // {
+    //   uint64 fault_addr = r_stval();
+    //   uint64 missing_perm = 0;
+    //   if (cause == 13) missing_perm = PTE_R;
+    //   if (cause == 15) missing_perm = PTE_W;
+    //   if (cause == 12) missing_perm = PTE_X;
+    //   if (p == 0) {
+    //     panic("kernel page fault\n");
+    //   }
+    //   printf("kernel segmentation fault pid=%d addr=%p missing_perm=%d\n",
+    //          p->pid, fault_addr, missing_perm);
+    //   if (uvm_completemap(&p->uvm, PGROUNDDOWN(fault_addr), missing_perm) ==
+    //       0) {
+    //     p->killed = 1;
+    //     printf("kernel segmentation fault pid=%d addr=%p missing_perm=%d\n",
+    //            p->pid, fault_addr, missing_perm);
+    //   }
+    // } break;
+    default:
+      if ((which_dev = devintr()) == 0) {
+        printf("cause %p\n", cause);
+        printf("sepc=%p stval=%p\n", r_sepc(), r_stval());
+        panic("kerneltrap");
+      }
   }
 
-  if(p != 0 && p->killed)
-    exit(-1);
+  if (p != 0 && p->killed) exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2 && p != 0 && p->state == RUNNING)
-    yield();
+  if (which_dev == 2 && p != 0 && p->state == RUNNING) yield();
 
   // the yield() may have caused some traps to occur,
   // so restore trap registers for use by kernelvec.S's sepc instruction.
@@ -192,9 +185,7 @@ kerneltrap()
   w_sstatus(sstatus);
 }
 
-void
-clockintr()
-{
+void clockintr() {
   acquire(&tickslock);
   ticks++;
   wakeup(&ticks);
@@ -206,41 +197,37 @@ clockintr()
 // returns 2 if timer interrupt,
 // 1 if other device,
 // 0 if not recognized.
-int
-devintr()
-{
+int devintr() {
   uint64 scause = r_scause();
 
-  if((scause & 0x8000000000000000L) &&
-     (scause & 0xff) == 9){
+  if ((scause & 0x8000000000000000L) && (scause & 0xff) == 9) {
     // this is a supervisor external interrupt, via PLIC.
 
     // irq indicates which device interrupted.
     int irq = plic_claim();
 
-    if(irq == UART0_IRQ){
+    if (irq == UART0_IRQ) {
       uartintr();
-    } else if(irq == VIRTIO0_IRQ){
+    } else if (irq == VIRTIO0_IRQ) {
       virtio_disk_intr();
-    } else if(irq){
+    } else if (irq) {
       printf("unexpected interrupt irq=%d\n", irq);
     }
 
     // the PLIC allows each device to raise at most one
     // interrupt at a time; tell the PLIC the device is
     // now allowed to interrupt again.
-    if(irq)
-      plic_complete(irq);
+    if (irq) plic_complete(irq);
 
     return 1;
-  } else if(scause == 0x8000000000000001L){
+  } else if (scause == 0x8000000000000001L) {
     // software interrupt from a machine-mode timer interrupt,
     // forwarded by timervec in kernelvec.S.
 
-    if(cpuid() == 0){
+    if (cpuid() == 0) {
       clockintr();
     }
-    
+
     // acknowledge the software interrupt by clearing
     // the SSIP bit in sip.
     w_sip(r_sip() & ~2);
@@ -250,4 +237,3 @@ devintr()
     return 0;
   }
 }
-

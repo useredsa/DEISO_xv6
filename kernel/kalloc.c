@@ -2,20 +2,20 @@
 // kernel stacks, page-table pages,
 // and pipe buffers. Allocates whole 4096-byte pages.
 
-#include "types.h"
-#include "param.h"
-#include "memlayout.h"
-#include "spinlock.h"
-#include "riscv.h"
 #include "defs.h"
 #include "kalloc.h"
+#include "memlayout.h"
+#include "param.h"
+#include "riscv.h"
+#include "spinlock.h"
+#include "types.h"
 
 #define MAXPAGES (PHYSTOP / PGSIZE)
 
-void freerange(void *pa_start, void *pa_end);
+void freerange(uint64 pa_start, uint64 pa_end);
 
-extern char end[]; // first address after kernel.
-                   // defined by kernel.ld.
+extern char end[];  // first address after kernel.
+                    // defined by kernel.ld.
 
 struct {
   struct spinlock lock;
@@ -24,77 +24,78 @@ struct {
   uint64 freelist[MAXPAGES];
 } kmem;
 
-
-
-void
-kinit()
-{
+void kinit() {
   initlock(&kmem.lock, "kmem");
-  freerange(end, (void*)PHYSTOP);
+  freerange((uint64) end, (uint64)PHYSTOP);
 }
 
 // Free the page of physical memory pointed at by v,
 // which normally should have been returned by a
 // call to kalloc().  (The exception is when
 // initializing the allocator; see kinit above.)
-void
-kfree(void *pa)
-{
+void kfree(uint64 pa) {
   // printf("kfree %p %d\n", pa, kmem.numfree);
   // Fill with junk to catch dangling refs.
-  memset(pa, 1, PGSIZE);
-  kmem.freelist[kmem.numfree] = (uint64) pa >> PGSHIFT;
+  memset((void*)pa, 1, PGSIZE);
+  kmem.freelist[kmem.numfree] = pa >> PGSHIFT;
   kmem.numfree++;
 }
 
-void
-freerange(void *pa_start, void *pa_end)
-{
-  char *p;
-  p = (char*)PGROUNDUP((uint64)pa_start);
-  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
+void freerange(uint64 pa_start, uint64 pa_end) {
+  for (uint64 p = PGROUNDUP(pa_start); p + PGSIZE <= pa_end; p += PGSIZE) {
     kfree(p);
+  }
 }
 
-void *
-kalloc(void)
-{
+uint64 kalloc(void) {
   uint64 index;
-  void* pa;
+  uint64 pa;
 
   acquire(&kmem.lock);
   if (kmem.numfree == 0) {
     release(&kmem.lock);
+    printf("kalloc: out of memory\n");
     return 0;
   }
   kmem.numfree--;
   index = kmem.freelist[kmem.numfree];
   release(&kmem.lock);
   kmem.refs[index] = 1;
-  pa = (void*) (index << PGSHIFT);
-  memset((char*)pa, 5, PGSIZE); // fill with junk
+  pa = index << PGSHIFT;
+  memset((void*)pa, 5, PGSIZE);  // fill with junk
   return pa;
 }
 
-void 
-kincref(void *pa){
-  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
+void kincref(uint64 pa) {
+  if ((pa % PGSIZE) != 0 || (char*)pa < end || pa >= PHYSTOP)
     panic("kincref");
   acquire(&kmem.lock);
-  int index = (uint64) pa >> PGSHIFT;
+  uint64 index = pa >> PGSHIFT;
   kmem.refs[index]++;
   release(&kmem.lock);
 }
 
-void 
-kdecref(void *pa){
-  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
+void kdecref(uint64 pa) {
+  if ((pa % PGSIZE) != 0 || (char*)pa < end || pa >= PHYSTOP)
     panic("kdecref");
   acquire(&kmem.lock);
-  int index = (uint64) pa >> PGSHIFT;
+  uint64 index = pa >> PGSHIFT;
   kmem.refs[index]--;
-  if(kmem.refs[index] == 0){
+  if (kmem.refs[index] < 0) {
+    panic("kdecref: refs below 0\n");
+  }
+  if (kmem.refs[index] == 0) {
     kfree(pa);
   }
   release(&kmem.lock);
+}
+
+int ksingleref(uint64 pa) {
+  if ((pa % PGSIZE) != 0 || (char*)pa < end || pa >= PHYSTOP)
+    panic("ksingleref");
+  acquire(&kmem.lock);
+  uint64 index = (uint64)pa >> PGSHIFT;
+  int single = kmem.refs[index] == 1;
+  release(&kmem.lock);
+  return single;
 }

@@ -48,7 +48,7 @@ pipealloc(struct file **f0, struct file **f1)
 
  bad:
   if(pi)
-    kdecref((char*)pi);
+    kdecref((uint64)pi);
   if(*f0)
     fileclose(*f0);
   if(*f1)
@@ -69,7 +69,7 @@ pipeclose(struct pipe *pi, int writable)
   }
   if(pi->readopen == 0 && pi->writeopen == 0){
     release(&pi->lock);
-    kdecref((char*)pi);
+    kdecref((uint64)pi);
   } else
     release(&pi->lock);
 }
@@ -91,7 +91,7 @@ pipewrite(struct pipe *pi, uint64 addr, int n)
       sleep(&pi->nwrite, &pi->lock);
     } else {
       char ch;
-      if(copyin(pr->pagetable, &ch, addr + i, 1) == -1)
+      if(copyin(&pr->uvm, &ch, addr + i, 1) == -1)
         break;
       pi->data[pi->nwrite++ % PIPESIZE] = ch;
       i++;
@@ -122,7 +122,7 @@ piperead(struct pipe *pi, uint64 addr, int n)
     if(pi->nread == pi->nwrite)
       break;
     ch = pi->data[pi->nread++ % PIPESIZE];
-    if(copyout(pr->pagetable, addr + i, &ch, 1) == -1)
+    if(copyout(&pr->uvm, addr + i, &ch, 1) == -1)
       break;
   }
   wakeup(&pi->nwrite);  //DOC: piperead-wakeup

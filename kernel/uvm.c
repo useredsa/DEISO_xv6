@@ -1,0 +1,479 @@
+#include "defs.h"
+#include "file.h"
+#include "kalloc.h"
+#include "memlayout.h"
+#include "pagetable.h"
+#include "uvm.h"
+
+#define MIN(x, y) (y < x ? y : x)
+#define MAX(x, y) (y > x ? y : x)
+
+extern char trampoline[];  // trampoline.S
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Vma primitives
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TODO create a lock for accessing this and use it everywhere.
+struct vma vmas[MAX_VMAS];
+
+struct vma* vmaalloc(struct uvm* uvm, uint64 addr) {
+  int i;
+  for (i = 0; i < VMA_SIZE; i++) {
+    if (uvm->vma[i] == 0) break;
+  }
+  if (i == VMA_SIZE) return 0;
+  int j;
+  for (j = 0; j < MAX_VMAS; j++) {
+    if (vmas[j].used == 0) {
+      break;
+    }
+  }
+  if (j == VMA_SIZE) return 0;
+  vmas[j].used = 1;
+  uvm->vma[i] = &vmas[j];
+  return uvm->vma[i];
+}
+
+void vma_init(struct vma* vma, uint64 start, uint64 length, uint perm,
+              uint flags, struct inode* inode, uint offset, uint filesz) {
+  vma->start = start;
+  vma->length = length;
+  vma->perm = perm;
+  vma->flags = flags;
+  if (inode != 0) {
+    vma->inode = idup(inode);
+  } else {
+    vma->inode = inode;
+  }
+  vma->offset = offset;
+  vma->filesz = filesz;
+}
+
+void vmafree(struct vma* vma) {
+  vma->used = 0;
+  if (vma->inode) iput(vma->inode);
+}
+
+struct vma* vmadup(struct vma* vma) {
+  int i;
+  for (i = 0; i < MAX_VMAS; i++) {
+    if (vmas[i].used == 0) break;
+  }
+  if (i == MAX_VMAS) return 0;
+  vmas[i].used = 1;
+  vmas[i].start = vma->start;
+  vmas[i].length = vma->length;
+  vmas[i].perm = vma->perm;
+  vmas[i].flags = vma->flags;
+  if (vma->inode) vmas[i].inode = idup(vma->inode);
+  vmas[i].offset = vma->offset;
+  return &vmas[i];
+}
+
+int vma_intersect(struct vma* v, struct vma* w) {
+  uint64 l = MAX(PGROUNDDOWN(v->start), PGROUNDDOWN(w->start));
+  uint64 r =
+      MIN(PGROUNDUP(v->start + v->length), PGROUNDUP(w->start + w->length));
+  return l < r;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// User paging
+// ─────────────────────────────────────────────────────────────────────────────
+
+int uvm_new(struct uvm* uvm, uint64 trapframe) {
+  // printf("-> uvm_new %p\n", uvm);
+  memset(uvm, 0, sizeof(struct uvm));
+  if ((uvm->pagetable = pgt_new()) == 0) return -1;
+
+  // Map the trampoline code (for system call return)
+  // at the highest user virtual address.
+  if (pgt_map(uvm->pagetable, TRAMPOLINE, (uint64)trampoline, PTE_R | PTE_X)) {
+    pgt_free(uvm->pagetable);
+    uvm->pagetable = 0;
+    return -1;
+  }
+  // Only the supervisor uses it, on the way to/from user space, so not PTE_U.
+  pgt_clearubit(uvm->pagetable, (uint64)TRAMPOLINE);
+
+  // Map the trapframe just below TRAMPOLINE, for trampoline.S.
+  if (pgt_map(uvm->pagetable, TRAPFRAME, trapframe, PTE_R | PTE_W)) {
+    pgt_deallocunmap(uvm->pagetable, TRAMPOLINE, TRAMPOLINE + PGSIZE);
+    pgt_free(uvm->pagetable);
+    uvm->pagetable = 0;
+    return -1;
+  }
+  // Only the supervisor uses it, on the way to/from user space, so not PTE_U.
+  pgt_clearubit(uvm->pagetable, (uint64)TRAPFRAME);
+
+  return 0;
+}
+
+void uvm_free(struct uvm* uvm) {
+  // printf("->uvm_free: %p\n", uvm);
+  // printf("-> uvm_free %p\n", uvm);
+  for (int i = 0; i < VMA_SIZE; ++i) {
+    if (uvm->vma[i]) {
+      uvm_unmap(uvm, uvm->vma[i]->start, uvm->vma[i]->length);
+    }
+  }
+  if (uvm->pagetable == 0) panic("uvm_free");
+  pgt_unmap(uvm->pagetable, TRAMPOLINE, TRAMPOLINE + PGSIZE);
+  pgt_unmap(uvm->pagetable, TRAPFRAME, TRAPFRAME + PGSIZE);
+  pgt_free(uvm->pagetable);
+  uvm->pagetable = 0;
+}
+
+struct vma* uvm_va2vma(struct uvm* uvm, uint64 va) {
+  for (struct vma** vma = uvm->vma; vma < uvm->vma + VMA_SIZE; ++vma) {
+    if (*vma && (*vma)->start <= va && va < (*vma)->start + (*vma)->length) {
+      return *vma;
+    }
+  }
+  return 0;
+}
+
+/**
+ * Check if range does not intersect uvm's vmas.
+ */
+int uvm_israngefree(struct uvm* uvm, uint64 vastart, uint64 length) {
+  for (int i = 0; i < VMA_SIZE; ++i) {
+    if (uvm->vma[i]) {
+      uint64 l = MAX(PGROUNDDOWN(vastart), PGROUNDDOWN(uvm->vma[i]->start));
+      uint64 r = MIN(PGROUNDUP(vastart + length),
+                     PGROUNDUP(uvm->vma[i]->start + uvm->vma[i]->length));
+      if (l < r) return 0;
+    }
+  }
+  return 1;
+}
+
+/**
+ * Select a virtual adress for a vma length length.
+ */
+uint64 getfreevrange(struct uvm* uvm, int length) {
+  uint64 addr = START_VMAS_ADDR;
+  while (1) {
+    if (uvm_israngefree(uvm, addr, length)) return addr;
+    // Otherwise, the next address to try shall be
+    // the first end of vma higher than vma.
+    uint64 previous_addr = addr;
+    addr = MAXVA;
+    for (int i = 0; i < VMA_SIZE; ++i) {
+      if (uvm->vma[i]) {
+        uint64 endvma = PGROUNDUP(uvm->vma[i]->start + uvm->vma[i]->length);
+        if (endvma > previous_addr) {
+          addr = MIN(addr, endvma);
+        }
+      }
+    }
+    addr = PGROUNDUP(addr);
+    // If there is none, return an error.
+    if (addr + length > MAXVA) break;
+  }
+  return 0;
+}
+
+uint64 uvm_map(struct uvm* uvm, uint64 addr, uint64 length, uint perm,
+               uint flags, struct inode* inode, uint offset, uint filesz) {
+  // printf("-> uvm_map %p, addr=%p length=%p, inode=%p\n", uvm, addr, length,
+  // inode);
+  if (inode == 0 && flags != MAP_PRIVATE) return MAP_FAILED;
+  // if (inode != 0 && addr % PGSIZE != offset % PGSIZE) return MAP_FAILED;
+
+  struct vma* vma;
+  if (!uvm_israngefree(uvm, addr, length)) return MAP_FAILED;
+  if ((vma = vmaalloc(uvm, addr)) == 0) return MAP_FAILED;
+  vma_init(vma, addr, length, perm, flags, inode, offset, filesz);
+  if (inode) {
+    if (MAP_PRIVATE) {
+      /*
+      ilock(f->inode);
+      r = readi(f->inode, 1, addr, offset, length);
+      // f->inode->size = MAX(f->inode->size, addr+length);
+      iunlock(f->inode);
+      if (r == -1) {
+        uvmdealloc(uvm->pagetable, addr + length, addr);
+        for (int i = 0; i < VMA_SIZE; ++i) {
+          if (uvm->vma[i] == vma) {
+            uvm->vma[i] = 0;
+            vmafree(vma);
+          }
+        }
+        return MAP_FAILED;
+      }
+      */
+    }
+  }
+  return addr;
+}
+
+void uvm_unmap(struct uvm* uvm, uint64 addr, uint64 length) {
+  // printf("->uvm_map: %p %p %p\n", uvm, addr, length);
+  // printf("-> uvm_unmap %p, addr=%p length=%p\n", uvm, addr, length);
+  struct vma* vma = uvm_va2vma(uvm, addr);
+  if (vma == 0) panic("uvm_unmap: not in vma!\n");
+  if (addr != vma->start && addr + length != vma->start + vma->length)
+    panic("uvm_unmap: not a valid mode\n");
+  // if (vma->flags == MAP_SHARED) {
+  //   // TODO shouldn't this be smt like writei?
+  //   struct file f;
+  //   f.type = FD_INODE;
+  //   f.ref = 1;
+  //   f.writable = 1;
+  //   f.ip = vma->inode;
+  //   f.off = vma->offset;
+  //   filewrite(&f, addr, length);
+  // }
+  if (vma->length == length) {
+    pgt_deallocunmap(uvm->pagetable, PGROUNDDOWN(addr),
+                     PGROUNDUP(addr + length));
+    // If range is whole vma, free it.
+    for (int i = 0; i < VMA_SIZE; i++) {
+      if (vma == uvm->vma[i]) {
+        uvm->vma[i] = 0;
+        break;
+      }
+    }
+    vmafree(vma);
+  } else if (addr == vma->start) {
+    pgt_deallocunmap(uvm->pagetable, PGROUNDDOWN(addr),
+                     PGROUNDDOWN(addr + length));
+    vma->start += length;
+    vma->offset += length;
+    vma->length -= length;
+    vma->filesz = MAX(vma->filesz - length, 0);
+  } else {
+    pgt_deallocunmap(uvm->pagetable, PGROUNDUP(addr), PGROUNDUP(addr + length));
+    vma->length -= length;
+    vma->filesz = MIN(vma->filesz, vma->length);
+  }
+}
+
+pte_t* pgt_walk(pagetable_t pagetable, uint64 va, int alloc);
+
+uint64 uvm_completemap(struct uvm* uvm, uint64 va, uint64 missing_perm) {
+  if (va % PGSIZE != 0 || va >= MAXVA) return 0;
+  // printf("-> complete map part 0 %p %d\n", va, missing_perm);
+  // TODO
+  //  if ((missing_perm & PTE_R) && (missing_perm & PTE_W))
+  //    panic("uvm_completemap: 2 missing perms\n");
+  struct vma* vma = uvm_va2vma(uvm, va);
+  if (!vma || (vma->perm & missing_perm) == 0) return 0;
+
+  pte_t* pte = pgt_walk(uvm->pagetable, va, 1);
+  // TODO cmments
+  if (pte == 0) return 0;
+  // printf("complete map part 2 %d %d\n", PTE_FLAGS(*pte) & 31,
+  //        PTE_FLAGS(*pte) & missing_perm);
+
+  if ((*pte & PTE_V) == 0) {
+    // If pte did not exist, handle depending on whether its file.
+    uint64 pa;
+    if ((pa = kalloc()) == 0) return 0;
+    *pte = PA2PTE(pa) | vma->perm | PTE_V | PTE_U;
+    // TODO
+    memset((char*)pa, 0, PGSIZE);
+    //  if (vma->inode != 0)
+    //  printf("Reading from file %p %p %p %p %p\n", va, pa, vma->start,
+    //  vma->offset,
+    //         vma->filesz);
+    // return pa;
+    if (vma->inode != 0) {
+      // printf("Reading from file %p %p %p %p\n", va, pa, vma->start,
+      // vma->offset, vma->filesz);
+      // File -> read
+      uint64 eof = vma->start + vma->filesz;
+      if (va < eof) {
+        uint64 readsz = MIN(eof - va, PGSIZE);
+        // printf("read %p from file\n", readsz);
+        // ilock(vma->inode);
+        // printf("COMPMAP %p %p %p\n", pa, vma->offset + (va - vma->start),
+        //        readsz);
+        int r =
+            readi(vma->inode, 0, pa, vma->offset + (va - vma->start), readsz);
+        // iunlock(vma->inode);
+        // TODO handle r != read length
+        if (r != readsz) panic("uvm_completemap: readi");
+      }
+    }
+    return pa;
+  }
+
+  // If it is valid but it is not a user page return error
+  if ((*pte & PTE_U) == 0) return 0;
+
+  if (missing_perm == PTE_W) {
+    // If pte did exist and it was a write failure,
+    // give write permissions if the physical page
+    // is only reference once,
+    // or copy the page to a new page.
+    uint64 pa = PTE2PA(*pte);
+    if (ksingleref(pa)) {
+      // printf("no copy on write %p\n", pa);
+      *pte |= PTE_W;
+      return pa;
+    }
+    // printf("copy on write %p\n", pa);
+    uint64 mem;
+    if ((mem = kalloc()) == 0) {
+      return 0;
+    }
+    memmove((void*)mem, (void*)pa, PGSIZE);
+    *pte = PA2PTE(mem) | PTE_FLAGS(*pte) | PTE_W;
+    kdecref(pa);
+    return mem;
+  }
+  printf("complete map part 2 %d %d\n", PTE_FLAGS(*pte) & 31,
+         PTE_FLAGS(*pte) & missing_perm);
+  // If pte did exist and it was a read failure,
+  // panic for the moment.
+  printf("vaddr=%p paddr=%p\n", va, PTE2PA(*pte));
+  panic("read page fault\n");
+  return PTE2PA(*pte);
+}
+
+int uvm_growheap(struct uvm* uvm, int n) {
+  // printf("-> uvm_growheap %p, n=%d\n", uvm, n);
+  struct vma* heap = uvm->heap;
+  if (n > 0) {
+    uint64 end = heap->start + heap->length;
+    if (end > end + n || end + n > TRAPFRAME) return -1;
+    heap->length += n;
+    for (int i = 0; i < VMA_SIZE; ++i) {
+      if (!uvm->vma[i] || uvm->vma[i] == heap) continue;
+      if (vma_intersect(uvm->heap, uvm->vma[i])) {
+        uvm->heap->length -= n;
+        return -1;
+      }
+    }
+  } else if (n < 0) {
+    // TODO not make heap minimum size PGSIZE: see exec
+    if (heap->length < -n) return -1;
+    printf("reducing %p\n", n);
+    uvm_unmap(uvm, heap->start + heap->length + n, -n);
+  }
+  return 0;
+}
+
+int uvm_dup(struct uvm* p, struct uvm* c) {
+  // printf("-> uvm_dup %p %p\n", p, c);
+  for (int i = 0; i < VMA_SIZE; i++) {
+    if (p->vma[i]) {
+      c->vma[i] = vmadup(p->vma[i]);
+      if (c->vma[i] == 0) goto err;
+      if (pgt_clone(p->pagetable, c->pagetable, PGROUNDDOWN(p->vma[i]->start),
+                    PGROUNDUP(p->vma[i]->start + p->vma[i]->length)) < 0) {
+        c->vma[i]->used = 0;
+        vmafree(c->vma[i]);
+        goto err;
+      }
+      if (p->vma[i] == p->heap) c->heap = c->vma[i];
+    }
+  }
+  return 0;
+
+err:
+  for (int i = 0; i < VMA_SIZE; i++) {
+    if (c->vma[i]) {
+      uvm_unmap(c, c->vma[i]->start, c->vma[i]->start + c->vma[i]->length);
+    }
+  }
+  return -1;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Utilities
+// ─────────────────────────────────────────────────────────────────────────────
+
+void code2uvm(struct uvm* uvm, uchar* src, uint sz) {
+  if (sz >= PGSIZE) panic("inituvm: more than a page");
+  struct vma* vma = vmaalloc(uvm, 0);
+  vma_init(vma, 0, PGSIZE, PTE_R | PTE_W | PTE_X, MAP_PRIVATE, 0, 0, 0);
+  uint64 mem = kalloc();
+  memset((void*)mem, 0, PGSIZE);
+  pgt_map(uvm->pagetable, 0, mem, PTE_R | PTE_W | PTE_X);
+  memmove((void*)mem, src, sz);
+}
+
+int copyout(struct uvm* uvm, uint64 dstva, char* src, uint64 len) {
+  // printf("->copyout: %p %p %p\n", uvm, dstva, len);
+  uint64 n, va0, pa0;
+
+  while (len > 0) {
+    va0 = PGROUNDDOWN(dstva);
+    pa0 = pgt_getpa(uvm->pagetable, va0);
+    if (pa0 == 0) {
+      if ((pa0 = uvm_completemap(uvm, va0, PTE_W)) == 0) return -1;
+    }
+    n = PGSIZE - (dstva - va0);
+    if (n > len) n = len;
+    memmove((void*)(pa0 + (dstva - va0)), src, n);
+
+    len -= n;
+    src += n;
+    dstva = va0 + PGSIZE;
+  }
+  return 0;
+}
+
+int copyin(struct uvm* uvm, char* dst, uint64 srcva, uint64 len) {
+  // printf("->copyin: %p %p %p\n", uvm, srcva, len);
+  uint64 n, va0, pa0;
+
+  while (len > 0) {
+    va0 = PGROUNDDOWN(srcva);
+    pa0 = pgt_getpa(uvm->pagetable, va0);
+    if (pa0 == 0) {
+      printf("this may fail %p\n", va0);
+      if ((pa0 = uvm_completemap(uvm, va0, PTE_R)) == 0) return -1;
+    }
+    n = PGSIZE - (srcva - va0);
+    if (n > len) n = len;
+    memmove(dst, (void*)(pa0 + (srcva - va0)), n);
+
+    len -= n;
+    dst += n;
+    srcva = va0 + PGSIZE;
+  }
+  return 0;
+}
+
+int copyinstr(struct uvm* uvm, char* dst, uint64 srcva, uint64 max) {
+  // printf("->copyinstr: %p %p %p\n", uvm, srcva, max);
+  uint64 n, va0, pa0;
+  int got_null = 0;
+
+  while (got_null == 0 && max > 0) {
+    va0 = PGROUNDDOWN(srcva);
+    pa0 = pgt_getpa(uvm->pagetable, va0);
+    if (pa0 == 0) {
+      if ((pa0 = uvm_completemap(uvm, va0, PTE_R)) == 0) return -1;
+    }
+    n = PGSIZE - (srcva - va0);
+    if (n > max) n = max;
+
+    char* p = (char*)(pa0 + (srcva - va0));
+    while (n > 0) {
+      if (*p == '\0') {
+        *dst = '\0';
+        got_null = 1;
+        break;
+      } else {
+        *dst = *p;
+      }
+      --n;
+      --max;
+      p++;
+      dst++;
+    }
+
+    srcva = va0 + PGSIZE;
+  }
+  if (got_null) {
+    return 0;
+  } else {
+    return -1;
+  }
+}
