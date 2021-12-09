@@ -52,7 +52,11 @@ void vma_init(struct vma* vma, uint64 start, uint64 length, uint perm,
 
 void vmafree(struct vma* vma) {
   vma->used = 0;
-  if (vma->inode) iput(vma->inode);
+  if (vma->inode) {
+    begin_op();
+    iput(vma->inode);
+    end_op();
+  }
 }
 
 struct vma* vmadup(struct vma* vma) {
@@ -68,6 +72,7 @@ struct vma* vmadup(struct vma* vma) {
   vmas[i].flags = vma->flags;
   if (vma->inode) vmas[i].inode = idup(vma->inode);
   vmas[i].offset = vma->offset;
+  vmas[i].filesz = vma->filesz;
   return &vmas[i];
 }
 
@@ -122,6 +127,14 @@ void uvm_free(struct uvm* uvm) {
   uvm->pagetable = 0;
 }
 
+void uvm_freesharedmem(struct uvm* uvm) {
+  for (int i = 0; i < VMA_SIZE; ++i) {
+    if (uvm->vma[i] && uvm->vma[i]->flags == MAP_SHARED) {
+      uvm_unmap(uvm, uvm->vma[i]->start, uvm->vma[i]->length);
+    }
+  }
+}
+
 struct vma* uvm_va2vma(struct uvm* uvm, uint64 va) {
   for (struct vma** vma = uvm->vma; vma < uvm->vma + VMA_SIZE; ++vma) {
     if (*vma && (*vma)->start <= va && va < (*vma)->start + (*vma)->length) {
@@ -131,9 +144,6 @@ struct vma* uvm_va2vma(struct uvm* uvm, uint64 va) {
   return 0;
 }
 
-/**
- * Check if range does not intersect uvm's vmas.
- */
 int uvm_israngefree(struct uvm* uvm, uint64 vastart, uint64 length) {
   for (int i = 0; i < VMA_SIZE; ++i) {
     if (uvm->vma[i]) {
@@ -146,9 +156,6 @@ int uvm_israngefree(struct uvm* uvm, uint64 vastart, uint64 length) {
   return 1;
 }
 
-/**
- * Select a virtual adress for a vma length length.
- */
 uint64 getfreevrange(struct uvm* uvm, int length) {
   uint64 addr = START_VMAS_ADDR;
   while (1) {
@@ -174,16 +181,15 @@ uint64 getfreevrange(struct uvm* uvm, int length) {
 
 uint64 uvm_map(struct uvm* uvm, uint64 addr, uint64 length, uint perm,
                uint flags, struct inode* inode, uint offset, uint filesz) {
-  // inode);
-  if (inode == 0 && flags != MAP_PRIVATE) return MAP_FAILED;
-  // if (inode != 0 && addr % PGSIZE != offset % PGSIZE) return MAP_FAILED;
+  if (inode == 0 && flags != MAP_PRIVATE) return -1;
 
   struct vma* vma;
-  if (!uvm_israngefree(uvm, addr, length)) return MAP_FAILED;
-  if ((vma = vmaalloc(uvm, addr)) == 0) return MAP_FAILED;
+  if (!uvm_israngefree(uvm, addr, length)) return -1;
+  if ((vma = vmaalloc(uvm, addr)) == 0) return -1;
   vma_init(vma, addr, length, perm, flags, inode, offset, filesz);
   if (inode) {
     if (MAP_PRIVATE) {
+      //TODO
       /*
       ilock(f->inode);
       r = readi(f->inode, 1, addr, offset, length);
@@ -197,7 +203,7 @@ uint64 uvm_map(struct uvm* uvm, uint64 addr, uint64 length, uint perm,
             vmafree(vma);
           }
         }
-        return MAP_FAILED;
+        return -1;
       }
       */
     }
@@ -210,16 +216,35 @@ void uvm_unmap(struct uvm* uvm, uint64 addr, uint64 length) {
   if (vma == 0) panic("uvm_unmap: not in vma!\n");
   if (addr != vma->start && addr + length != vma->start + vma->length)
     panic("uvm_unmap: not a valid mode\n");
-  // if (vma->flags == MAP_SHARED) {
-  //   // TODO shouldn't this be smt like writei?
-  //   struct file f;
-  //   f.type = FD_INODE;
-  //   f.ref = 1;
-  //   f.writable = 1;
-  //   f.ip = vma->inode;
-  //   f.off = vma->offset;
-  //   filewrite(&f, addr, length);
-  // }
+  if (vma->flags == MAP_SHARED) {
+    begin_op();
+    ilock(vma->inode);
+    for (uint64 va = PGROUNDDOWN(addr); va < PGROUNDUP(addr + length);
+         va += PGSIZE) {
+      uint64 pa = pgt_getpa(uvm->pagetable, va);
+      if (pa == 0) continue;
+      uint64 va0 = MAX(va, addr);
+      uint64 va1 = MIN(va + PGSIZE, addr + length);
+      va1 = MIN(va1, vma->start + vma->filesz);
+      if (va1 <= va0) continue;
+      uint64 pa0 = pa + (va0 - va);
+      uint64 len = va1 - va0;
+      int w = writei(vma->inode, 0, pa0, vma->offset + (va0 - vma->start), len);
+      if (w != len) {
+        panic("uvm_unmap: write error\n");
+      }
+    }
+    iunlock(vma->inode);
+    end_op();
+    // // TODO shouldn't this be smt like writei?
+    // struct file f;
+    // f.type = FD_INODE;
+    // f.ref = 1;
+    // f.writable = 1;
+    // f.ip = vma->inode;
+    // f.off = vma->offset;
+    // filewrite(&f, addr, length);
+  }
   if (vma->length == length) {
     pgt_deallocunmap(uvm->pagetable, PGROUNDDOWN(addr),
                      PGROUNDUP(addr + length));

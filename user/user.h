@@ -1,8 +1,8 @@
-#define PROT_READ 0x01
-#define PROT_WRITE 0x02
+#define PROT_READ 0x2
+#define PROT_WRITE 0x4
+#define PROT_EXECUTE 0x8
 #define MAP_PRIVATE 0x00
 #define MAP_SHARED 0x01
-
 struct stat;
 struct rtcdate;
 struct pstat;

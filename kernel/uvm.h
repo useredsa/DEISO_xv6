@@ -17,7 +17,6 @@
 #define PROT_EXECUTE PTE_X
 #define MAP_PRIVATE 0x00
 #define MAP_SHARED 0x01
-#define MAP_FAILED -1
 
 struct vma {
   int used;
@@ -52,6 +51,8 @@ int uvm_new(struct uvm* uvm, uint64 trapframe);
  * Free the user memory, unmapping all the virtual memory areas.
  */
 void uvm_free(struct uvm* uvm);
+
+void uvm_freesharedmem(struct uvm* uvm);
 
 /**
  * Locate the process' vma associated to a virtual address.
@@ -101,6 +102,16 @@ int uvm_dup(struct uvm* parent, struct uvm* child);
 // ─────────────────────────────────────────────────────────────────────────────
 // Utilities
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Check if range does not intersect uvm's vmas.
+ */
+int uvm_israngefree(struct uvm* uvm, uint64 vastart, uint64 length);
+
+/**
+ * Select a virtual adress for a vma length length.
+ */
+uint64 getfreevrange(struct uvm* uvm, int length);
 
 /**
  * Create the user virtual memory for the first process.

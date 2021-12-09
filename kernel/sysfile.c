@@ -9,7 +9,6 @@
 #include "file.h"
 #include "fs.h"
 #include "kalloc.h"
-#include "uvm.h"
 #include "param.h"
 #include "proc.h"
 #include "riscv.h"
@@ -17,12 +16,13 @@
 #include "spinlock.h"
 #include "stat.h"
 #include "types.h"
+#include "uvm.h"
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
-static int argfd(int n, int *pfd, struct file **pf) {
+static int argfd(int n, int* pfd, struct file** pf) {
   int fd;
-  struct file *f;
+  struct file* f;
 
   if (argint(n, &fd) < 0) return -1;
   if (fd < 0 || fd >= NOFILE || (f = myproc()->ofile[fd]) == 0) return -1;
@@ -33,9 +33,9 @@ static int argfd(int n, int *pfd, struct file **pf) {
 
 // Allocate a file descriptor for the given file.
 // Takes over file reference from caller on success.
-static int fdalloc(struct file *f) {
+static int fdalloc(struct file* f) {
   int fd;
-  struct proc *p = myproc();
+  struct proc* p = myproc();
 
   for (fd = 0; fd < NOFILE; fd++) {
     if (p->ofile[fd] == 0) {
@@ -47,7 +47,7 @@ static int fdalloc(struct file *f) {
 }
 
 uint64 sys_dup(void) {
-  struct file *f;
+  struct file* f;
   int fd;
 
   if (argfd(0, 0, &f) < 0) return -1;
@@ -57,7 +57,7 @@ uint64 sys_dup(void) {
 }
 
 uint64 sys_read(void) {
-  struct file *f;
+  struct file* f;
   int n;
   uint64 p;
 
@@ -66,7 +66,7 @@ uint64 sys_read(void) {
 }
 
 uint64 sys_write(void) {
-  struct file *f;
+  struct file* f;
   int n;
   uint64 p;
 
@@ -77,7 +77,7 @@ uint64 sys_write(void) {
 
 uint64 sys_close(void) {
   int fd;
-  struct file *f;
+  struct file* f;
 
   if (argfd(0, &fd, &f) < 0) return -1;
   myproc()->ofile[fd] = 0;
@@ -86,7 +86,7 @@ uint64 sys_close(void) {
 }
 
 uint64 sys_fstat(void) {
-  struct file *f;
+  struct file* f;
   uint64 st;  // user pointer to struct stat
 
   if (argfd(0, 0, &f) < 0 || argaddr(1, &st) < 0) return -1;
@@ -140,7 +140,7 @@ bad:
 }
 
 // Is the directory dp empty except for "." and ".." ?
-static int isdirempty(struct inode *dp) {
+static int isdirempty(struct inode* dp) {
   int off;
   struct dirent de;
 
@@ -203,7 +203,7 @@ bad:
   return -1;
 }
 
-static struct inode *create(char *path, short type, short major, short minor) {
+static struct inode* create(char* path, short type, short major, short minor) {
   struct inode *ip, *dp;
   char name[DIRSIZ];
 
@@ -246,8 +246,8 @@ static struct inode *create(char *path, short type, short major, short minor) {
 uint64 sys_open(void) {
   char path[MAXPATH];
   int fd, omode;
-  struct file *f;
-  struct inode *ip;
+  struct file* f;
+  struct inode* ip;
   int n;
 
   if ((n = argstr(0, path, MAXPATH)) < 0 || argint(1, &omode) < 0) return -1;
@@ -309,7 +309,7 @@ uint64 sys_open(void) {
 
 uint64 sys_mkdir(void) {
   char path[MAXPATH];
-  struct inode *ip;
+  struct inode* ip;
 
   begin_op();
   if (argstr(0, path, MAXPATH) < 0 || (ip = create(path, T_DIR, 0, 0)) == 0) {
@@ -322,7 +322,7 @@ uint64 sys_mkdir(void) {
 }
 
 uint64 sys_mknod(void) {
-  struct inode *ip;
+  struct inode* ip;
   char path[MAXPATH];
   int major, minor;
 
@@ -340,8 +340,8 @@ uint64 sys_mknod(void) {
 
 uint64 sys_chdir(void) {
   char path[MAXPATH];
-  struct inode *ip;
-  struct proc *p = myproc();
+  struct inode* ip;
+  struct proc* p = myproc();
 
   begin_op();
   if (argstr(0, path, MAXPATH) < 0 || (ip = namei(path)) == 0) {
@@ -374,14 +374,14 @@ uint64 sys_exec(void) {
     if (i >= NELEM(argv)) {
       goto bad;
     }
-    if (fetchaddr(uargv + sizeof(uint64) * i, (uint64 *)&uarg) < 0) {
+    if (fetchaddr(uargv + sizeof(uint64) * i, (uint64*)&uarg) < 0) {
       goto bad;
     }
     if (uarg == 0) {
       argv[i] = 0;
       break;
     }
-    argv[i] = (char *)kalloc();
+    argv[i] = (char*)kalloc();
     if (argv[i] == 0) goto bad;
     if (fetchstr(uarg, argv[i], PGSIZE) < 0) goto bad;
   }
@@ -401,7 +401,7 @@ uint64 sys_pipe(void) {
   uint64 fdarray;  // user pointer to array of two integers
   struct file *rf, *wf;
   int fd0, fd1;
-  struct proc *p = myproc();
+  struct proc* p = myproc();
 
   if (argaddr(0, &fdarray) < 0) return -1;
   if (pipealloc(&rf, &wf) < 0) return -1;
@@ -412,8 +412,8 @@ uint64 sys_pipe(void) {
     fileclose(wf);
     return -1;
   }
-  if (copyout(&p->uvm, fdarray, (char *)&fd0, sizeof(fd0)) < 0 ||
-      copyout(&p->uvm, fdarray + sizeof(fd0), (char *)&fd1, sizeof(fd1)) < 0) {
+  if (copyout(&p->uvm, fdarray, (char*)&fd0, sizeof(fd0)) < 0 ||
+      copyout(&p->uvm, fdarray + sizeof(fd0), (char*)&fd1, sizeof(fd1)) < 0) {
     p->ofile[fd0] = 0;
     p->ofile[fd1] = 0;
     fileclose(rf);
@@ -426,24 +426,30 @@ uint64 sys_pipe(void) {
 uint64 sys_mmap(void) {
   uint64 addr;
   size_t length;
-  int prot;
+  int perm;
   int flags;
   int fd;
   int offset;
   struct file* f;
 
-  if (argaddr(0, &addr) < 0) return MAP_FAILED;
-  if (argaddr(1, &length) < 0) return MAP_FAILED;
-  if (argint(2, &prot) < 0) return MAP_FAILED;
-  if (argint(3, &flags) < 0) return MAP_FAILED;
-  if (argfd(4, &fd, &f) < 0) return MAP_FAILED;
-  if (argint(5, &offset) < 0) return MAP_FAILED;
-  if (f->type != FD_INODE && f->type != FD_DEVICE) return MAP_FAILED;
-  if ((prot & PROT_READ) && !f->readable) return MAP_FAILED;
-  if ((prot & PROT_WRITE) && !f->writable) return MAP_FAILED;
-  return MAP_FAILED;
-  //TODO
-  // return mmap(addr, length, prot, flags, pf, offset);
+  if (argaddr(0, &addr) < 0) return -1;
+  if (argaddr(1, &length) < 0) return -1;
+  if (argint(2, &perm) < 0) return -1;
+  if (argint(3, &flags) < 0) return -1;
+  if (argfd(4, &fd, &f) < 0) return -1;
+  if (argint(5, &offset) < 0) return -1;
+
+  if (f->type != FD_INODE) return -1;
+  struct inode* ip = f->ip;
+  if ((perm & PROT_READ) && !f->readable) return -1;
+  if ((perm & PROT_WRITE) && flags == MAP_SHARED && !f->writable) return -1;
+  struct uvm* uvm = &myproc()->uvm;
+  if (!uvm_israngefree(uvm, addr, length) &&
+      (addr = getfreevrange(uvm, length)) == 0) {
+    return -1;
+  }
+  addr = uvm_map(uvm, addr, length, perm, flags, ip, offset, ip->size - offset);
+  return addr;
 }
 
 uint64 sys_munmap(void) {
@@ -451,8 +457,11 @@ uint64 sys_munmap(void) {
   size_t length;
   if (argaddr(0, &addr) < 0) return -1;
   if (argaddr(1, &length) < 0) return -1;
-  //TODO fail if corresponding vma is not of user.
-  //TODO
-  return -1;
-  // return munmap(addr, length);
+  struct uvm* uvm = &myproc()->uvm;
+  struct vma* vma = uvm_va2vma(uvm, addr);
+  if (uvm == 0) return -1;
+  if (addr != vma->start && addr + length != vma->start + vma->length)
+    return -1;
+  uvm_unmap(uvm, addr, length);
+  return 0;
 }

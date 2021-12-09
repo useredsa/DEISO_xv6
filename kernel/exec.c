@@ -48,9 +48,8 @@ int exec(char *path, char **argv) {
     perm |= ph.flags & ELF_PROG_FLAG_READ ? PTE_R : 0;
     perm |= ph.flags & ELF_PROG_FLAG_WRITE ? PTE_W : 0;
     perm |= ph.flags & ELF_PROG_FLAG_EXEC ? PTE_X : 0;
-    if (uvm_map(&uvm, ph.vaddr, ph.memsz, perm,
-                perm & PTE_W ? MAP_PRIVATE : MAP_SHARED, ip, ph.off,
-                ph.filesz) == MAP_FAILED)
+    if (uvm_map(&uvm, ph.vaddr, ph.memsz, perm, MAP_PRIVATE, ip, ph.off,
+                ph.filesz) == -1)
       goto bad;
     // We need to unlock because complete_map locks
     iunlock(ip);
@@ -71,7 +70,7 @@ int exec(char *path, char **argv) {
   // Use the second as the user stack.
   highest_addr = PGROUNDUP(highest_addr);
   if (uvm_map(&uvm, highest_addr, 2 * PGSIZE, PTE_R | PTE_W | PTE_X,
-              MAP_PRIVATE, 0, 0, 0) == MAP_FAILED)
+              MAP_PRIVATE, 0, 0, 0) == -1)
     goto bad;
   uvm_completemap(&uvm, highest_addr, PTE_R);
   pgt_clearubit(uvm.pagetable, highest_addr);
@@ -80,7 +79,7 @@ int exec(char *path, char **argv) {
 
   // Create a vma representing the heap of size PGSIZE
   if (uvm_map(&uvm, sp, PGSIZE, PTE_R | PTE_W | PTE_X, MAP_PRIVATE, 0, 0, 0) ==
-      MAP_FAILED)
+      -1)
     goto bad;
   uvm.heap = uvm_va2vma(&uvm, sp);
 

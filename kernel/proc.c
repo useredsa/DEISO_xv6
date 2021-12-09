@@ -127,7 +127,8 @@ found:
 static void freeproc(struct proc *p) {
   if (p->trapframe) kdecref((uint64)p->trapframe);
   p->trapframe = 0;
-  uvm_free(&p->uvm);
+  //TODO
+  // uvm_free(&p->uvm);
   for (int i = 0; i < VMA_SIZE; i++) {
     if (p->uvm.vma[i]) {
       panic("freeproc: remaining vma\n");
@@ -253,6 +254,9 @@ void exit(int status) {
       p->ofile[fd] = 0;
     }
   }
+
+  // Unmap all shared memory
+  uvm_free(&p->uvm);
 
   begin_op();
   iput(p->cwd);
