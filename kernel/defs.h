@@ -1,3 +1,9 @@
+#ifndef DEFS_H_
+#define DEFS_H_
+
+#include "types.h"
+#include "riscv.h"
+
 struct buf;
 struct context;
 struct file;
@@ -191,3 +197,5 @@ uint rand(struct rng* rng);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
+
+#endif
