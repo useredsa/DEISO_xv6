@@ -15,7 +15,6 @@ extern char trampoline[];  // trampoline.S
 // Vma primitives
 // ─────────────────────────────────────────────────────────────────────────────
 
-// TODO create a lock for accessing this and use it everywhere.
 struct vma vmas[MAX_VMAS];
 struct spinlock lock_vmas;
 
