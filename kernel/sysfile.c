@@ -8,6 +8,7 @@
 #include "fcntl.h"
 #include "file.h"
 #include "fs.h"
+#include "kalloc.h"
 #include "param.h"
 #include "proc.h"
 #include "riscv.h"
@@ -379,19 +380,19 @@ uint64 sys_exec(void) {
       argv[i] = 0;
       break;
     }
-    argv[i] = kalloc();
+    argv[i] = (char*)kalloc();
     if (argv[i] == 0) goto bad;
     if (fetchstr(uarg, argv[i], PGSIZE) < 0) goto bad;
   }
 
   int ret = exec(path, argv);
 
-  for (i = 0; i < NELEM(argv) && argv[i] != 0; i++) kfree(argv[i]);
+  for (i = 0; i < NELEM(argv) && argv[i] != 0; i++) kfree((uint64)argv[i]);
 
   return ret;
 
 bad:
-  for (i = 0; i < NELEM(argv) && argv[i] != 0; i++) kfree(argv[i]);
+  for (i = 0; i < NELEM(argv) && argv[i] != 0; i++) kfree((uint64)argv[i]);
   return -1;
 }
 

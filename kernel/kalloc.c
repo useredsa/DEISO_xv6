@@ -1,71 +1,97 @@
-// Physical memory allocator, for user processes,
-// kernel stacks, page-table pages,
-// and pipe buffers. Allocates whole 4096-byte pages.
-
+/**
+ * Physical memory allocator, for user processes, kernel stacks,
+ * page-table pages, and pipe buffers.
+ * Allocates whole 4096-byte pages.
+ */
 #include "defs.h"
+#include "kalloc.h"
 #include "memlayout.h"
 #include "param.h"
 #include "riscv.h"
 #include "spinlock.h"
 #include "types.h"
 
-void freerange(void *pa_start, void *pa_end);
+#define MAXPAGES (PHYSTOP / PGSIZE)
+
+void freerange(uint64 pa_start, uint64 pa_end);
 
 extern char end[];  // first address after kernel.
                     // defined by kernel.ld.
 
-struct run {
-  struct run *next;
-};
-
 struct {
   struct spinlock lock;
-  struct run *freelist;
+  uint64 numfree;
+  int refs[MAXPAGES];
+  uint64 freelist[MAXPAGES];
 } kmem;
 
 void kinit() {
   initlock(&kmem.lock, "kmem");
-  freerange(end, (void *)PHYSTOP);
-}
-
-void freerange(void *pa_start, void *pa_end) {
-  char *p;
-  p = (char *)PGROUNDUP((uint64)pa_start);
-  for (; p + PGSIZE <= (char *)pa_end; p += PGSIZE) kfree(p);
+  freerange((uint64)end, (uint64)PHYSTOP);
 }
 
 // Free the page of physical memory pointed at by v,
-// which normally should have been returned by a
-// call to kalloc().  (The exception is when
-// initializing the allocator; see kinit above.)
-void kfree(void *pa) {
-  struct run *r;
-
-  if (((uint64)pa % PGSIZE) != 0 || (char *)pa < end || (uint64)pa >= PHYSTOP)
-    panic("kfree");
-
+// which normally should have been returned by a call to kalloc().
+// (The exception is when initializing the allocator; see kinit above.)
+void krelease(uint64 pa) {
   // Fill with junk to catch dangling refs.
-  memset(pa, 1, PGSIZE);
+  memset((void*)pa, 1, PGSIZE);
+  kmem.freelist[kmem.numfree] = pa >> PGSHIFT;
+  kmem.numfree++;
+}
 
-  r = (struct run *)pa;
+void freerange(uint64 pa_start, uint64 pa_end) {
+  for (uint64 p = PGROUNDUP(pa_start); p + PGSIZE <= pa_end; p += PGSIZE) {
+    krelease(p);
+  }
+}
+
+uint64 kalloc(void) {
+  uint64 index;
+  uint64 pa;
 
   acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
+  if (kmem.numfree == 0) {
+    release(&kmem.lock);
+    return 0;
+  }
+  kmem.numfree--;
+  index = kmem.freelist[kmem.numfree];
+  release(&kmem.lock);
+  kmem.refs[index] = 1;
+  pa = index << PGSHIFT;
+  memset((void*)pa, 5, PGSIZE);  // fill with junk
+  return pa;
+}
+
+void kincref(uint64 pa) {
+  if ((pa % PGSIZE) != 0 || (char*)pa < end || pa >= PHYSTOP) panic("kincref");
+  acquire(&kmem.lock);
+  uint64 index = pa >> PGSHIFT;
+  kmem.refs[index]++;
   release(&kmem.lock);
 }
 
-// Allocate one 4096-byte page of physical memory.
-// Returns a pointer that the kernel can use.
-// Returns 0 if the memory cannot be allocated.
-void *kalloc(void) {
-  struct run *r;
-
+void kfree(uint64 pa) {
+  if ((pa % PGSIZE) != 0 || (char*)pa < end || pa >= PHYSTOP) panic("kfree");
   acquire(&kmem.lock);
-  r = kmem.freelist;
-  if (r) kmem.freelist = r->next;
+  uint64 index = pa >> PGSHIFT;
+  kmem.refs[index]--;
+  if (kmem.refs[index] < 0) {
+    panic("kfree: refs below 0\n");
+  }
+  if (kmem.refs[index] == 0) {
+    krelease(pa);
+  }
   release(&kmem.lock);
+}
 
-  if (r) memset((char *)r, 5, PGSIZE);  // fill with junk
-  return (void *)r;
+int ksingleref(uint64 pa) {
+  if ((pa % PGSIZE) != 0 || (char*)pa < end || pa >= PHYSTOP)
+    panic("ksingleref");
+  acquire(&kmem.lock);
+  uint64 index = (uint64)pa >> PGSHIFT;
+  int single = kmem.refs[index] == 1;
+  release(&kmem.lock);
+  return single;
 }

@@ -3,6 +3,7 @@
 #include "memlayout.h"
 #include "riscv.h"
 #include "defs.h"
+#include "kalloc.h"
 
 volatile static int started = 0;
 
