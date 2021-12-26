@@ -29,7 +29,7 @@ struct spinlock wait_lock;
 // initialize the proc table at boot time.
 void procinit(void) {
   struct proc *p;
-
+  uvminit();
   initlock(&pid_lock, "nextpid");
   initlock(&wait_lock, "wait_lock");
   for (p = proc; p < &proc[NPROC]; p++) {

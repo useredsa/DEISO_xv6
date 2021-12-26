@@ -38,6 +38,10 @@ struct uvm {
 // ─────────────────────────────────────────────────────────────────────────────
 // User paging
 // ─────────────────────────────────────────────────────────────────────────────
+/**
+ * Initialize lock of vmas 
+ */
+void uvminit();
 
 /**
  * Initialize the virtual memory for a user process given its trapframe.

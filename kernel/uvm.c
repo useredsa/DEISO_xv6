@@ -3,6 +3,7 @@
 #include "kalloc.h"
 #include "memlayout.h"
 #include "pagetable.h"
+#include "spinlock.h"
 #include "uvm.h"
 
 #define MIN(x, y) (y < x ? y : x)
@@ -16,6 +17,11 @@ extern char trampoline[];  // trampoline.S
 
 // TODO create a lock for accessing this and use it everywhere.
 struct vma vmas[MAX_VMAS];
+struct spinlock lock_vmas;
+
+void uvminit() {
+  initlock(&lock_vmas, "lock_vmas");
+}
 
 struct vma* vmaalloc(struct uvm* uvm, uint64 addr) {
   int i;
@@ -30,8 +36,10 @@ struct vma* vmaalloc(struct uvm* uvm, uint64 addr) {
     }
   }
   if (j == VMA_SIZE) return 0;
+  acquire(&lock_vmas);
   vmas[j].used = 1;
   uvm->vma[i] = &vmas[j];
+  release(&lock_vmas);
   return uvm->vma[i];
 }
 
@@ -48,6 +56,7 @@ void vma_init(struct vma* vma, uint64 start, uint64 length, uint perm,
   }
   vma->offset = offset;
   vma->filesz = filesz;
+  
 }
 
 void vmafree(struct vma* vma) {
@@ -65,6 +74,7 @@ struct vma* vmadup(struct vma* vma) {
     if (vmas[i].used == 0) break;
   }
   if (i == MAX_VMAS) return 0;
+  acquire(&lock_vmas);
   vmas[i].used = 1;
   vmas[i].start = vma->start;
   vmas[i].length = vma->length;
@@ -73,6 +83,7 @@ struct vma* vmadup(struct vma* vma) {
   if (vma->inode) vmas[i].inode = idup(vma->inode);
   vmas[i].offset = vma->offset;
   vmas[i].filesz = vma->filesz;
+  release(&lock_vmas);
   return &vmas[i];
 }
 
