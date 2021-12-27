@@ -6,6 +6,7 @@
 #include "riscv.h"
 #include "spinlock.h"
 #include "types.h"
+#include "uvm.h"
 
 struct cpu cpus[NCPU];
 
@@ -19,32 +20,16 @@ struct spinlock pid_lock;
 extern void forkret(void);
 static void freeproc(struct proc *p);
 
-extern char trampoline[];  // trampoline.S
-
 // helps ensure that wakeups of wait()ing
 // parents are not lost. helps obey the
 // memory model when using p->parent.
 // must be acquired before any p->lock.
 struct spinlock wait_lock;
 
-// Allocate a page for each process's kernel stack.
-// Map it high in memory, followed by an invalid
-// guard page.
-void proc_mapstacks(pagetable_t kpgtbl) {
-  struct proc *p;
-
-  for (p = proc; p < &proc[NPROC]; p++) {
-    char *pa = (char*)kalloc();
-    if (pa == 0) panic("kalloc");
-    uint64 va = KSTACK((int)(p - proc));
-    kvmmap(kpgtbl, va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
-  }
-}
-
 // initialize the proc table at boot time.
 void procinit(void) {
   struct proc *p;
-
+  uvminit();
   initlock(&pid_lock, "nextpid");
   initlock(&wait_lock, "wait_lock");
   for (p = proc; p < &proc[NPROC]; p++) {
@@ -122,11 +107,9 @@ found:
   }
 
   // An empty user page table.
-  p->pagetable = proc_pagetable(p);
-  if (p->pagetable == 0) {
+  if (uvm_new(&p->uvm, (uint64)p->trapframe)) {
     freeproc(p);
     release(&p->lock);
-    return 0;
   }
 
   // Set up new context to start executing at forkret,
@@ -144,9 +127,11 @@ found:
 static void freeproc(struct proc *p) {
   if (p->trapframe) kfree((uint64)p->trapframe);
   p->trapframe = 0;
-  if (p->pagetable) proc_freepagetable(p->pagetable, p->sz);
-  p->pagetable = 0;
-  p->sz = 0;
+  for (int i = 0; i < VMA_SIZE; i++) {
+    if (p->uvm.vma[i]) {
+      panic("freeproc: remaining vma\n");
+    }
+  }
   p->pid = 0;
   p->parent = 0;
   p->name[0] = 0;
@@ -154,44 +139,6 @@ static void freeproc(struct proc *p) {
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
-}
-
-// Create a user page table for a given process,
-// with no user memory, but with trampoline pages.
-pagetable_t proc_pagetable(struct proc *p) {
-  pagetable_t pagetable;
-
-  // An empty page table.
-  pagetable = uvmcreate();
-  if (pagetable == 0) return 0;
-
-  // map the trampoline code (for system call return)
-  // at the highest user virtual address.
-  // only the supervisor uses it, on the way
-  // to/from user space, so not PTE_U.
-  if (mappages(pagetable, TRAMPOLINE, PGSIZE, (uint64)trampoline,
-               PTE_R | PTE_X) < 0) {
-    uvmfree(pagetable, 0);
-    return 0;
-  }
-
-  // map the trapframe just below TRAMPOLINE, for trampoline.S.
-  if (mappages(pagetable, TRAPFRAME, PGSIZE, (uint64)(p->trapframe),
-               PTE_R | PTE_W) < 0) {
-    uvmunmap(pagetable, TRAMPOLINE, 1, 0);
-    uvmfree(pagetable, 0);
-    return 0;
-  }
-
-  return pagetable;
-}
-
-// Free a process's page table, and free the
-// physical memory it refers to.
-void proc_freepagetable(pagetable_t pagetable, uint64 sz) {
-  uvmunmap(pagetable, TRAMPOLINE, 1, 0);
-  uvmunmap(pagetable, TRAPFRAME, 1, 0);
-  uvmfree(pagetable, sz);
 }
 
 // a user program that calls exec("/init")
@@ -210,10 +157,8 @@ void userinit(void) {
   p = allocproc();
   initproc = p;
 
-  // allocate one user page and copy init's instructions
-  // and data into it.
-  uvminit(p->pagetable, initcode, sizeof(initcode));
-  p->sz = PGSIZE;
+  // Create uvm for the initial process.
+  code2uvm(&p->uvm, initcode, sizeof(initcode));
 
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
@@ -228,24 +173,6 @@ void userinit(void) {
   release(&p->lock);
 }
 
-// Grow or shrink user memory by n bytes.
-// Return 0 on success, -1 on failure.
-int growproc(int n) {
-  uint sz;
-  struct proc *p = myproc();
-
-  sz = p->sz;
-  if (n > 0) {
-    if ((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
-      return -1;
-    }
-  } else if (n < 0) {
-    sz = uvmdealloc(p->pagetable, sz, sz + n);
-  }
-  p->sz = sz;
-  return 0;
-}
-
 // Create a new process, copying the parent.
 // Sets up child kernel stack to return as if from fork() system call.
 int fork(void) {
@@ -258,13 +185,12 @@ int fork(void) {
     return -1;
   }
 
-  // Copy user memory from parent to child.
-  if (uvmcopy(p->pagetable, np->pagetable, p->sz) < 0) {
+  // Assign the child the same vmas as the father
+  if (uvm_dup(&p->uvm, &np->uvm)) {
     freeproc(np);
     release(&np->lock);
     return -1;
   }
-  np->sz = p->sz;
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
@@ -327,6 +253,9 @@ void exit(int status) {
     }
   }
 
+  // Unmap all shared memory
+  uvm_free(&p->uvm);
+
   begin_op();
   iput(p->cwd);
   end_op();
@@ -373,7 +302,7 @@ int wait(uint64 addr) {
         if (np->state == ZOMBIE) {
           // Found one.
           pid = np->pid;
-          if (addr != 0 && copyout(p->pagetable, addr, (char *)&np->xstate,
+          if (addr != 0 && copyout(&p->uvm, addr, (char *)&np->xstate,
                                    sizeof(np->xstate)) < 0) {
             release(&np->lock);
             release(&wait_lock);
@@ -588,7 +517,7 @@ int kill(int pid) {
 int either_copyout(int user_dst, uint64 dst, void *src, uint64 len) {
   struct proc *p = myproc();
   if (user_dst) {
-    return copyout(p->pagetable, dst, src, len);
+    return copyout(&p->uvm, dst, src, len);
   } else {
     memmove((char *)dst, src, len);
     return 0;
@@ -601,7 +530,7 @@ int either_copyout(int user_dst, uint64 dst, void *src, uint64 len) {
 int either_copyin(void *dst, int user_src, uint64 src, uint64 len) {
   struct proc *p = myproc();
   if (user_src) {
-    return copyin(p->pagetable, dst, src, len);
+    return copyin(&p->uvm, dst, src, len);
   } else {
     memmove(dst, (char *)src, len);
     return 0;

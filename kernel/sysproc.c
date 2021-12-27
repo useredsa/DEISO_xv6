@@ -26,12 +26,12 @@ uint64 sys_wait(void) {
 }
 
 uint64 sys_sbrk(void) {
-  int addr;
   int n;
-
   if (argint(0, &n) < 0) return -1;
-  addr = myproc()->sz;
-  if (growproc(n) < 0) return -1;
+  struct uvm* uvm = &myproc()->uvm;
+  if (uvm == 0 || uvm->heap == 0) panic("sys_sbrk\n");
+  uint64 addr = uvm->heap->start + uvm->heap->length;
+  if (uvm_growheap(uvm, n) < 0) return -1;
   return addr;
 }
 
@@ -99,6 +99,5 @@ uint64 sys_getpinfo(void) {
     procstat.pid[i] = proc[i].pid;
     procstat.ticks[i] = proc[i].ticks;
   }
-  return copyout(myproc()->pagetable, useraddr, (char*)&procstat,
-                 sizeof(procstat));
+  return copyout(&myproc()->uvm, useraddr, (char*)&procstat, sizeof(procstat));
 }

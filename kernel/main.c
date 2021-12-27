@@ -4,6 +4,7 @@
 #include "riscv.h"
 #include "defs.h"
 #include "kalloc.h"
+#include "pagetable.h"
 
 volatile static int started = 0;
 

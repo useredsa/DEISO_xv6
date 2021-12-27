@@ -39,26 +39,46 @@ void usertrap(void) {
   // save user program counter.
   p->trapframe->epc = r_sepc();
 
-  if (r_scause() == 8) {
-    // system call
+  uint64 cause = r_scause();
+  switch (cause) {
+    case 8:  // system call
+      if (p->killed) exit(-1);
 
-    if (p->killed) exit(-1);
+      // sepc points to the ecall instruction,
+      // but we want to return to the next instruction.
+      p->trapframe->epc += 4;
 
-    // sepc points to the ecall instruction,
-    // but we want to return to the next instruction.
-    p->trapframe->epc += 4;
+      // an interrupt will change sstatus &c registers,
+      // so don't enable until done with those registers.
+      intr_on();
 
-    // an interrupt will change sstatus &c registers,
-    // so don't enable until done with those registers.
-    intr_on();
-
-    syscall();
-  } else if ((which_dev = devintr()) != 0) {
-    // ok
-  } else {
-    printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
-    printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
-    p->killed = 1;
+      syscall();
+      break;
+    case 12:  // execute page fault
+    case 13:  // read page fault
+    case 15:  // store page fault
+    {
+      uint64 fault_addr = r_stval();
+      uint64 missing_perm = 0;
+      if (cause == 13) missing_perm = PTE_R;
+      if (cause == 15) missing_perm = PTE_W;
+      if (cause == 12) missing_perm = PTE_X;
+      if (uvm_completemap(&p->uvm, PGROUNDDOWN(fault_addr), missing_perm) ==
+          0) {
+        p->killed = 1;
+        printf("\nsegmentation fault pid=%d addr=%p missing_perm=%d\n",
+               p->pid, fault_addr, missing_perm);
+      }
+    } break;
+    default:
+      if ((which_dev = devintr()) != 0) {
+        // ok
+      } else {
+        printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+        printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+        p->killed = 1;
+      }
+      break;
   }
 
   if (p->killed) exit(-1);
@@ -103,7 +123,7 @@ void usertrapret(void) {
   w_sepc(p->trapframe->epc);
 
   // tell trampoline.S the user page table to switch to.
-  uint64 satp = MAKE_SATP(p->pagetable);
+  uint64 satp = MAKE_SATP(p->uvm.pagetable);
 
   // jump to trampoline.S at the top of memory, which
   // switches to the user page table, restores user registers,
@@ -118,20 +138,46 @@ void kerneltrap() {
   int which_dev = 0;
   uint64 sepc = r_sepc();
   uint64 sstatus = r_sstatus();
-  uint64 scause = r_scause();
+  uint64 cause = r_scause();
+  struct proc *p = myproc();
 
   if ((sstatus & SSTATUS_SPP) == 0)
     panic("kerneltrap: not from supervisor mode");
   if (intr_get() != 0) panic("kerneltrap: interrupts enabled");
-
-  if ((which_dev = devintr()) == 0) {
-    printf("scause %p\n", scause);
-    printf("sepc=%p stval=%p\n", r_sepc(), r_stval());
-    panic("kerneltrap");
+  switch (cause) {
+    // case 12:  // execute page fault
+    // case 13:  // read page fault
+    // case 15:  // store page fault
+    // {
+    //   uint64 fault_addr = r_stval();
+    //   uint64 missing_perm = 0;
+    //   if (cause == 13) missing_perm = PTE_R;
+    //   if (cause == 15) missing_perm = PTE_W;
+    //   if (cause == 12) missing_perm = PTE_X;
+    //   if (p == 0) {
+    //     panic("kernel page fault\n");
+    //   }
+    //   printf("kernel segmentation fault pid=%d addr=%p missing_perm=%d\n",
+    //          p->pid, fault_addr, missing_perm);
+    //   if (uvm_completemap(&p->uvm, PGROUNDDOWN(fault_addr), missing_perm) ==
+    //       0) {
+    //     p->killed = 1;
+    //     printf("kernel segmentation fault pid=%d addr=%p missing_perm=%d\n",
+    //            p->pid, fault_addr, missing_perm);
+    //   }
+    // } break;
+    default:
+      if ((which_dev = devintr()) == 0) {
+        printf("cause %p\n", cause);
+        printf("sepc=%p stval=%p\n", r_sepc(), r_stval());
+        panic("kerneltrap");
+      }
   }
 
+  if (p != 0 && p->killed) exit(-1);
+
   // give up the CPU if this is a timer interrupt.
-  if (which_dev == 2 && myproc() != 0 && myproc()->state == RUNNING) yield();
+  if (which_dev == 2 && p != 0 && p->state == RUNNING) yield();
 
   // the yield() may have caused some traps to occur,
   // so restore trap registers for use by kernelvec.S's sepc instruction.

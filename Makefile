@@ -11,7 +11,8 @@ OBJS = \
   $K/spinlock.o \
   $K/string.o \
   $K/main.o \
-  $K/vm.o \
+  $K/pagetable.o \
+  $K/uvm.o \
   $K/proc.o \
   $K/swtch.o \
   $K/trampoline.o \

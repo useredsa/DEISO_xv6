@@ -16,6 +16,7 @@
 #include "spinlock.h"
 #include "stat.h"
 #include "types.h"
+#include "uvm.h"
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
@@ -411,9 +412,8 @@ uint64 sys_pipe(void) {
     fileclose(wf);
     return -1;
   }
-  if (copyout(p->pagetable, fdarray, (char*)&fd0, sizeof(fd0)) < 0 ||
-      copyout(p->pagetable, fdarray + sizeof(fd0), (char*)&fd1, sizeof(fd1)) <
-          0) {
+  if (copyout(&p->uvm, fdarray, (char*)&fd0, sizeof(fd0)) < 0 ||
+      copyout(&p->uvm, fdarray + sizeof(fd0), (char*)&fd1, sizeof(fd1)) < 0) {
     p->ofile[fd0] = 0;
     p->ofile[fd1] = 0;
     fileclose(rf);
