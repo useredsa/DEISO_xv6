@@ -422,3 +422,46 @@ uint64 sys_pipe(void) {
   }
   return 0;
 }
+
+uint64 sys_mmap(void) {
+  uint64 addr;
+  size_t length;
+  int perm;
+  int flags;
+  int fd;
+  int offset;
+  struct file* f;
+
+  if (argaddr(0, &addr) < 0) return -1;
+  if (argaddr(1, &length) < 0) return -1;
+  if (argint(2, &perm) < 0) return -1;
+  if (argint(3, &flags) < 0) return -1;
+  if (argfd(4, &fd, &f) < 0) return -1;
+  if (argint(5, &offset) < 0) return -1;
+
+  if (f->type != FD_INODE) return -1;
+  struct inode* ip = f->ip;
+  if ((perm & PROT_READ) && !f->readable) return -1;
+  if ((perm & PROT_WRITE) && flags == MAP_SHARED && !f->writable) return -1;
+  struct uvm* uvm = &myproc()->uvm;
+  if (!uvm_israngefree(uvm, addr, length) &&
+      (addr = getfreevrange(uvm, length)) == 0) {
+    return -1;
+  }
+  addr = uvm_map(uvm, addr, length, perm, flags, ip, offset, ip->size - offset);
+  return addr;
+}
+
+uint64 sys_munmap(void) {
+  uint64 addr;
+  size_t length;
+  if (argaddr(0, &addr) < 0) return -1;
+  if (argaddr(1, &length) < 0) return -1;
+  struct uvm* uvm = &myproc()->uvm;
+  struct vma* vma = uvm_va2vma(uvm, addr);
+  if (uvm == 0) return -1;
+  if (addr != vma->start && addr + length != vma->start + vma->length)
+    return -1;
+  uvm_unmap(uvm, addr, length);
+  return 0;
+}

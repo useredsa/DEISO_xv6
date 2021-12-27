@@ -137,6 +137,7 @@ UPROGS=\
 	$U/_testtickets\
 	$U/_ps\
 	$U/_lotterytest\
+	$U/_mmaptest\
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)
