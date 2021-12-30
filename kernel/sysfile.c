@@ -71,6 +71,12 @@ uint64 sys_write(void) {
   uint64 p;
 
   if (argfd(0, 0, &f) < 0 || argint(2, &n) < 0 || argaddr(1, &p) < 0) return -1;
+  // Make sure the user data is mapeed to avoid data races.
+  // This is a bad solution. (See documentation.)
+  struct uvm* uvm = &myproc()->uvm;
+  for (uint64 vaddr = PGROUNDDOWN(p); vaddr < p+n; vaddr += PGSIZE) {
+    if (uvm_guaranteecomplete(uvm, vaddr, PTE_R) == 0) return -1;
+  }
 
   return filewrite(f, p, n);
 }

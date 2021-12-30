@@ -301,11 +301,15 @@ uint64 uvm_completemap(struct uvm* uvm, uint64 va, uint64 missing_perm) {
     kfree(pa);
     return mem;
   }
-  printf("complete map part 2 %d %d\n", PTE_FLAGS(*pte) & 31,
-         PTE_FLAGS(*pte) & missing_perm);
   // If pte did exist and it was other types of failures
   // that should not happen -> panic.
-  printf("vaddr=%p paddr=%p\n", va, PTE2PA(*pte));
+  panic("invalid pagefault\n");
+}
+
+uint64 uvm_guaranteecomplete(struct uvm* uvm, uint64 va, uint64 minimum_perm) {
+  pte_t* pte = pgt_walk(uvm->pagetable, va, 0);
+  if (pte == 0 || (*pte & PTE_V) == 0 || (*pte & minimum_perm) == 0)
+    return uvm_completemap(uvm, va, minimum_perm);
   return PTE2PA(*pte);
 }
 

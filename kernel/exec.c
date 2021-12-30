@@ -9,9 +9,6 @@
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 
-static int loadseg(struct uvm *uvm, uint64 addr, struct inode *ip, uint offset,
-                   uint sz);
-
 int exec(char *path, char **argv) {
   char *s, *last;
   int i, off;
@@ -51,13 +48,6 @@ int exec(char *path, char **argv) {
     if (uvm_map(&uvm, ph.vaddr, ph.memsz, perm, MAP_PRIVATE, ip, ph.off,
                 ph.filesz) == -1)
       goto bad;
-    // We need to unlock because complete_map locks
-    iunlock(ip);
-    if (loadseg(&uvm, ph.vaddr, ip, ph.off, ph.filesz) < 0) {
-      ilock(ip);
-      goto bad;
-    }
-    ilock(ip);
     highest_addr = MAX(highest_addr, ph.vaddr + ph.memsz);
   }
   iunlockput(ip);
@@ -126,16 +116,4 @@ bad:
     end_op();
   }
   return -1;
-}
-
-// Load a program segment into pagetable at virtual address va.
-// va must be page-aligned
-// and the pages from va to va+sz must already be mapped.
-// Returns 0 on success, -1 on failure.
-static int loadseg(struct uvm *uvm, uint64 va, struct inode *ip, uint offset,
-                   uint sz) {
-  for (uint i = 0; i < sz; i += PGSIZE) {
-    uvm_completemap(uvm, va + i, PTE_R);
-  }
-  return 0;
 }

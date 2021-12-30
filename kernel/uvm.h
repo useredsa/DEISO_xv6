@@ -89,6 +89,15 @@ void uvm_unmap(struct uvm* uvm, uint64 addr, uint64 length);
 uint64 uvm_completemap(struct uvm* uvm, uint64 va, uint64 missing_perm);
 
 /**
+ * Makes sure a page is loaded into the user pagetable
+ * so that copyin/out/instr do not require to sleep.
+ *
+ * @returns the physical address of the new page.
+ * @returns 0 if lack of memory or the page fault is due to wrong access.
+ */
+uint64 uvm_guaranteecomplete(struct uvm* uvm, uint64 va, uint64 minimum_perm);
+
+/**
  * Grow or shrink user memory by n bytes.
  *
  * @returns 0 on success
